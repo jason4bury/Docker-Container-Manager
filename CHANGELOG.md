@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.01] - 2026-11-12
+
+### Added
+- **Configure** window for each container (button, right-click menu or Ctrl+E):
+  - lists its environment variables and where each value is kept (`.env`, the compose
+    file or this PC), with passwords and keys hidden until you tick **Show**,
+  - changes values: those from `.env` are saved in `.env` (with a note when other services
+    share the same variable), values written in the compose file are changed in place,
+  - **Move to .env** takes a value out of the compose file, stores it in `.env` and puts a
+    `${NAME}` reference in its place,
+  - **Add variable** adds a new one, with its value in `.env`,
+  - new `.env` values can also be added to the `Env_*` templates next to the compose file,
+  - **Save and recreate** recreates the container so it uses the new values,
+  - **Folders** opens any of its host folders, **Shell** opens a command prompt inside the
+    running container, plus **Web page** and **Logs**.
+- Backups of the compose file and `.env` are saved in
+  `%APPDATA%\Docker Container Manager\Backups\<project>\` before each change.
+
+### Changed
+- The app now changes the compose file and `.env` when you save in a Configure window.
+  Nothing else edits them.
+
 ## [1.00] - 2026-11-11
 First release.
 

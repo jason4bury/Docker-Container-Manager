@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.00-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.01-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -25,7 +25,8 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **Activity log** showing every docker command it runs and what Docker said, with Cancel.
 - **Tray icon** with Start and Stop for each group.
 - **Helpful banners** when Docker isn't running (with **Start Docker Desktop**), when the compose file has an error (the last good list stays), or when a folder has `Env_*` templates but no `.env` yet.
-- Never edits your compose file. Nothing is installed; settings are in `%APPDATA%`. The exe is self-contained.
+- **Configure** a container: change its environment variables, API keys and passwords, move values written in the compose file into `.env`, add new variables, and open its host folders, a shell inside it, its web page or logs. **Save and recreate** restarts it with the new values.
+- Only changes the compose file or `.env` when you save in a Configure window, and backs both up first. Nothing is installed; settings are in `%APPDATA%`. The exe is self-contained.
 
 ## 🖼️ Screenshots
 
@@ -41,7 +42,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-**Exe:** download `Docker Container Manager v1.00.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
+**Exe:** download `Docker Container Manager v1.01.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
 
 **Script:** clone this repo and run `Start Docker Container Manager.cmd`. It starts `src\Docker-Container-Manager.ps1` with the execution policy bypassed for that run only.
 
@@ -69,6 +70,7 @@ To try it without your own containers, open `docs\demo\docker-compose.yml` and p
 | --- | --- |
 | F5 | Read the compose file and status again |
 | Ctrl+F | Search by name, image, group or port |
+| Ctrl+E | Configure the selected container |
 | Ctrl+L | Logs of the selected container |
 | Enter, double-click | Open the selected container's web page (double-click opens the logs if it has none) |
 | Ctrl+A | Select everything in the list |

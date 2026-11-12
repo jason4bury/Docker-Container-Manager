@@ -18,7 +18,8 @@
         "Not in compose file", ready to stop or remove,
       - an edited service is marked "Changed" until it is recreated.
 
-    The app never edits the compose file itself.
+    The app only edits the compose file or .env when you save changes in a
+    Configure window, and keeps a backup copy in %APPDATA% first.
 
 .PARAMETER ComposeFile
     Open this compose file instead of the last one used.
@@ -28,10 +29,10 @@
     Opens the window with the last compose file used.
 
 .EXAMPLE
-    "Docker Container Manager v1.00.exe" -ComposeFile "D:\Docker\docker-compose.yml"
+    "Docker Container Manager v1.01.exe" -ComposeFile "D:\Docker\docker-compose.yml"
 
 .NOTES
-    Version:   1.00 (keep in step with CHANGELOG.md)
+    Version:   1.01 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -43,7 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.00'
+$script:AppVersion = '1.01'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 
 #region BUNDLE-ASSETS
@@ -75,8 +76,9 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 #                    PropertyChanged so the grid updates in place).
 #   Dcm.GroupEntry - one line in the Groups pane.
 #   Dcm.Finding    - one result of the compose file check.
+#   Dcm.EnvEntry   - one environment variable in the Configure window.
 # ---------------------------------------------------------------------------
-if (-not ('Dcm.Finding' -as [type])) {
+if (-not ('Dcm.EnvEntry' -as [type])) {
     Add-Type -Language CSharp -ReferencedAssemblies System, System.Core -TypeDefinition @'
 using System;
 using System.Collections.Concurrent;
@@ -226,6 +228,35 @@ namespace Dcm {
         public int    Order    { get { return Severity == "Error" ? 0 : (Severity == "Warning" ? 1 : 2); } }
     }
 
+    public class EnvEntry : Notifier {
+        public string Name     { get { return S("Name"); }     set { SetValue("Name", value); Refresh(); } }
+        public string Value    { get { return S("Value"); }    set { SetValue("Value", value); Refresh(); } }
+        public string Original { get { return S("Original"); } set { SetValue("Original", value); Refresh(); } }
+        public string Raw      { get { return S("Raw"); }      set { SetValue("Raw", value); } }
+        public string VarName  { get { return S("VarName"); }  set { SetValue("VarName", value); } }
+        public string From     { get { return S("From"); }     set { SetValue("From", value); } }
+        public string Form     { get { return S("Form"); }     set { SetValue("Form", value); } }
+        public bool   Secret   { get { return B("Secret"); }   set { SetValue("Secret", value); Refresh(); } }
+        public bool   Reveal   { get { return B("Reveal"); }   set { SetValue("Reveal", value); Refresh(); } }
+        public bool   IsNew    { get { return B("IsNew"); }    set { SetValue("IsNew", value); Refresh(); } }
+        public bool   MoveToEnv { get { return B("MoveToEnv"); } set { SetValue("MoveToEnv", value); Refresh(); } }
+        public bool   Editable { get { return B("Editable"); } set { SetValue("Editable", value); } }
+        public bool   Literal  { get { return B("Literal"); }  set { SetValue("Literal", value); } }
+        public bool   Missing  { get { return B("Missing"); }  set { SetValue("Missing", value); } }
+        public int    Line     { get { object o = GetValue("Line"); return o == null ? -1 : (int)o; } set { SetValue("Line", value); } }
+        public string Shown    { get { return S("Shown"); } }
+        public string Status   { get { return S("Status"); } }
+        private void Refresh() {
+            string v = S("Value");
+            SetValue("Shown", (B("Secret") && !B("Reveal") && v.Length > 0) ? new string('\u2022', Math.Min(12, v.Length)) : v);
+            string st = "";
+            if (B("IsNew")) { st = "New"; }
+            else if (B("MoveToEnv")) { st = "Move to .env"; }
+            else if (v != S("Original")) { st = "Changed"; }
+            SetValue("Status", st);
+        }
+    }
+
     public class GroupEntry : Notifier {
         public string Key     { get { return S("Key"); }     set { SetValue("Key", value); } }
         public string Name    { get { return S("Name"); }    set { SetValue("Name", value); } }
@@ -328,6 +359,8 @@ $script:Rows           = New-Object 'System.Collections.ObjectModel.ObservableCo
 $script:RowIndex       = @{}
 $script:Groups         = New-Object 'System.Collections.ObjectModel.ObservableCollection[Dcm.GroupEntry]'
 $script:LogWindows     = New-Object System.Collections.ArrayList
+$script:ConfigureWindows = New-Object System.Collections.ArrayList
+$script:ServiceConfigs = @{}
 $script:Closing        = $false
 $script:UngroupedName  = 'Ungrouped'
 $script:OrphanName     = 'Not in compose file'
@@ -719,6 +752,8 @@ $mainXaml = @'
                         <Button x:Name="BtnRestart" Content="Restart" Tag="&#xE72C;" Style="{DynamicResource Btn}" ToolTip="Restart the selected containers"/>
                         <Button x:Name="BtnUpdate" Content="Update" Tag="&#xE896;" Style="{DynamicResource Btn}"
                                 ToolTip="Pull the newest images and recreate the selected containers. Stopped ones stay stopped."/>
+                        <Button x:Name="BtnConfigure" Content="Configure" Tag="&#xE713;" Style="{DynamicResource Btn}"
+                                ToolTip="Environment variables, API keys and passwords, host folders and a shell for the selected container (Ctrl+E)"/>
                         <Button x:Name="BtnLogs" Content="Logs" Tag="&#xE9F9;" Style="{DynamicResource Btn}" ToolTip="Show the logs of the selected container (Ctrl+L)"/>
                         <Button x:Name="BtnOpen" Content="Open" Tag="&#xE774;" Style="{DynamicResource Btn}" ToolTip="Open the selected container's web page (Enter)" Margin="0"/>
                     </WrapPanel>
@@ -872,6 +907,7 @@ $mainXaml = @'
                                     <MenuItem x:Name="MnuUpdate" Header="Update (pull and recreate)"/>
                                     <MenuItem x:Name="MnuRecreate" Header="Recreate"/>
                                     <Separator/>
+                                    <MenuItem x:Name="MnuConfigure" Header="Configure..."/>
                                     <MenuItem x:Name="MnuLogs" Header="Logs"/>
                                     <MenuItem x:Name="MnuOpen" Header="Open web page"/>
                                     <MenuItem x:Name="MnuCopy" Header="Copy name"/>
@@ -928,9 +964,9 @@ $window = New-XamlObject $mainXaml
 $ui = @{}
 foreach ($name in 'ImgLogo', 'TxtSubtitle', 'CmbRecent', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnFolder', 'BtnSettings', 'BtnAbout',
     'Banner', 'BannerGlyph', 'BannerText', 'CmbEnvTemplate', 'BannerAction', 'BannerRetry',
-    'LstGroups', 'TxtSearch', 'SearchHint', 'CmbState', 'BtnStart', 'BtnStop', 'BtnRestart', 'BtnUpdate', 'BtnLogs', 'BtnOpen',
+    'LstGroups', 'TxtSearch', 'SearchHint', 'CmbState', 'BtnStart', 'BtnStop', 'BtnRestart', 'BtnUpdate', 'BtnConfigure', 'BtnLogs', 'BtnOpen',
     'TxtGroupName', 'TxtGroupInfo', 'BtnApply', 'BtnGroupStart', 'BtnGroupStop', 'BtnGroupUpdate', 'BtnRemoveOrphans', 'BtnRefresh',
-    'Grid', 'TxtEmpty', 'RowMenu', 'MnuStart', 'MnuStop', 'MnuRestart', 'MnuUpdate', 'MnuRecreate', 'MnuLogs', 'MnuOpen', 'MnuCopy', 'MnuRemove',
+    'Grid', 'TxtEmpty', 'RowMenu', 'MnuStart', 'MnuStop', 'MnuRestart', 'MnuUpdate', 'MnuRecreate', 'MnuConfigure', 'MnuLogs', 'MnuOpen', 'MnuCopy', 'MnuRemove',
     'LogRow', 'LogSplitter', 'LogPane', 'BtnLogCopy', 'BtnLogClear', 'TxtLog', 'TxtStatus', 'PrgBusy', 'TxtBusy', 'BtnCancel', 'ChkActivity') {
     $ui[$name] = $window.FindName($name)
 }
@@ -1389,6 +1425,206 @@ function Test-ComposeFile([string]$Path, [string]$Prefix = 'home') {
 }
 
 # ---------------------------------------------------------------------------
+# Container settings: reading and changing one service's environment.
+# The compose file and .env are edited as text, line by line, so comments,
+# order and spacing elsewhere stay exactly as they were.
+# ---------------------------------------------------------------------------
+$script:SecretNamePattern = '(PASSWORD|PASSWD|_PASS$|^PASS$|SECRET|TOKEN|API_?KEY|APIKEY|PRIVATE_KEY|CLAIM|CREDENTIAL)'
+
+function Read-TextFile([string]$Path) {
+    # Returns the lines plus what's needed to write the file back the same way.
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $bom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+    $text = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes)
+    if ($bom) { $text = $text.Substring(1) }
+    $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $endsWithNewline = $text.EndsWith("`n")
+    if ($endsWithNewline) { $text = $text.Substring(0, $text.Length - $nl.Length) }
+    $lines = New-Object System.Collections.Generic.List[string]
+    if ($text.Length) { $lines.AddRange([string[]]($text -split "`r?`n")) }
+    return @{ Path = $Path; Lines = $lines; Bom = $bom; NewLine = $nl; EndsWithNewline = $endsWithNewline }
+}
+
+function Write-TextFile($File) {
+    $text = ($File.Lines.ToArray() -join $File.NewLine)
+    if ($File.EndsWithNewline -or $File.Lines.Count -eq 0) { $text += $File.NewLine }
+    $tmp = $File.Path + '.dcm-tmp'
+    [IO.File]::WriteAllText($tmp, $text, (New-Object System.Text.UTF8Encoding($File.Bom)))
+    Move-Item -LiteralPath $tmp -Destination $File.Path -Force
+}
+
+function Get-LineIndent([string]$Line) { return $Line.Length - $Line.TrimStart(' ').Length }
+
+function Test-ContentLine([string]$Line) {
+    $t = $Line.Trim()
+    return ($t -ne '' -and -not $t.StartsWith('#'))
+}
+
+function Find-ServiceEnv($Lines, [string]$Service) {
+    # Finds the service block and its environment: section in the compose text.
+    $res = @{ Found = $false; Start = -1; End = -1; KeyIndent = -1; EnvLine = -1; Form = ''; ItemIndent = -1; Entries = @(); EnvFiles = @() }
+    $inServices = $false; $svcIndent = -1
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $l = $Lines[$i]
+        if (-not (Test-ContentLine $l)) { continue }
+        $ind = Get-LineIndent $l
+        if ($ind -eq 0) {
+            if ($res.Found -and $res.End -lt 0) { $res.End = $i - 1; break }
+            $inServices = ($l -match '^services\s*:')
+            continue
+        }
+        if (-not $inServices) { continue }
+        if ($svcIndent -lt 0) { $svcIndent = $ind }
+        if ($ind -eq $svcIndent) {
+            if ($res.Found) { $res.End = $i - 1; break }
+            $m = [regex]::Match($l.Trim(), '^("([^"]+)"|''([^'']+)''|([^\s:#]+))\s*:\s*$')
+            if ($m.Success) {
+                $name = @($m.Groups[2].Value, $m.Groups[3].Value, $m.Groups[4].Value) | Where-Object { $_ } | Select-Object -First 1
+                if ($name -eq $Service) { $res.Found = $true; $res.Start = $i }
+            }
+        }
+    }
+    if (-not $res.Found) { return $res }
+    if ($res.End -lt 0) { $res.End = $Lines.Count - 1 }
+    # Trim trailing blank/comment lines that belong between services.
+    while ($res.End -gt $res.Start -and -not (Test-ContentLine $Lines[$res.End])) { $res.End-- }
+
+    for ($i = $res.Start + 1; $i -le $res.End; $i++) {
+        if (Test-ContentLine $Lines[$i]) { $res.KeyIndent = Get-LineIndent $Lines[$i]; break }
+    }
+    if ($res.KeyIndent -lt 0) { return $res }
+
+    $entries = New-Object System.Collections.ArrayList
+    $envFiles = New-Object System.Collections.ArrayList
+    $section = ''
+    for ($i = $res.Start + 1; $i -le $res.End; $i++) {
+        $l = $Lines[$i]
+        if (-not (Test-ContentLine $l)) { continue }
+        $ind = Get-LineIndent $l
+        $t = $l.Trim()
+        if ($ind -eq $res.KeyIndent) {
+            $section = ''
+            if ($t -match '^environment\s*:\s*$') { $section = 'environment'; $res.EnvLine = $i }
+            elseif ($t -match '^env_file\s*:\s*(.*)$') {
+                $section = 'env_file'
+                $v = (Remove-YamlComment $Matches[1]).Trim()
+                if ($v) { [void]$envFiles.Add((Get-Unquoted $v)) }
+            }
+            continue
+        }
+        if ($ind -lt $res.KeyIndent) { continue }
+        if ($section -eq 'env_file') {
+            if ($t -match '^-\s*(.+)$') { [void]$envFiles.Add((Get-Unquoted (Remove-YamlComment $Matches[1]))) }
+            elseif ($t -match '^path\s*:\s*(.+)$') { [void]$envFiles.Add((Get-Unquoted (Remove-YamlComment $Matches[1]))) }
+            continue
+        }
+        if ($section -ne 'environment') { continue }
+        if ($res.ItemIndent -lt 0) { $res.ItemIndent = $ind }
+        if ($ind -ne $res.ItemIndent) { continue }
+        $body = Remove-YamlComment $t
+        if ($body -match '^-\s*(.*)$') {
+            if (-not $res.Form) { $res.Form = 'list' }
+            $item = $Matches[1]
+            $quote = ''
+            if ($item.Length -ge 2 -and ($item[0] -eq '"' -or $item[0] -eq "'") -and $item[-1] -eq $item[0]) { $quote = [string]$item[0]; $item = $item.Substring(1, $item.Length - 2) }
+            $eq = $item.IndexOf('=')
+            $n = if ($eq -ge 0) { $item.Substring(0, $eq).Trim() } else { $item.Trim() }
+            $v = if ($eq -ge 0) { $item.Substring($eq + 1) } else { $null }
+            [void]$entries.Add(@{ Name = $n; Raw = $v; Line = $i; Form = 'list'; Quote = $quote })
+        } elseif ($body -match '^("([^"]+)"|''([^'']+)''|([^\s:#]+))\s*:\s*(.*)$') {
+            if (-not $res.Form) { $res.Form = 'map' }
+            $n = @($Matches[2], $Matches[3], $Matches[4]) | Where-Object { $_ } | Select-Object -First 1
+            $rawValue = $Matches[5]
+            $quote = ''
+            if ($rawValue.Length -ge 2 -and ($rawValue[0] -eq '"' -or $rawValue[0] -eq "'") -and $rawValue[-1] -eq $rawValue[0]) {
+                $quote = [string]$rawValue[0]; $rawValue = $rawValue.Substring(1, $rawValue.Length - 2)
+            }
+            if ($rawValue -eq '' -and -not $quote) { $rawValue = $null }
+            [void]$entries.Add(@{ Name = $n; Raw = $rawValue; Line = $i; Form = 'map'; Quote = $quote })
+        }
+    }
+    $res.Entries = @($entries)
+    $res.EnvFiles = @($envFiles)
+    return $res
+}
+
+function Get-EnvFileValues([string]$Path) {
+    # Name -> @{ Value; Line } for a .env-style file (keeps the first definition, like Compose).
+    $map = @{}
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $map }
+    $f = Read-TextFile $Path
+    for ($i = 0; $i -lt $f.Lines.Count; $i++) {
+        if ($f.Lines[$i] -match '^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+            if ($map.ContainsKey($Matches[1])) { continue }
+            $v = $Matches[2].Trim()
+            if ($v.Length -ge 2 -and $v[0] -eq "'" -and $v[-1] -eq "'") { $v = $v.Substring(1, $v.Length - 2) }
+            elseif ($v.Length -ge 2 -and $v[0] -eq '"' -and $v[-1] -eq '"') { $v = $v.Substring(1, $v.Length - 2).Replace('\"', '"').Replace('\\', '\') }
+            else { $v = ($v -replace '\s+#.*$', '') }
+            $map[$Matches[1]] = @{ Value = $v; Line = $i }
+        }
+    }
+    return $map
+}
+
+function Format-EnvFileValue([string]$Value) {
+    if ($Value -match '^[A-Za-z0-9_./:@+,=%-]*$') { return $Value }
+    if (-not $Value.Contains("'")) { return "'$Value'" }
+    return '"' + $Value.Replace('\', '\\').Replace('"', '\"').Replace('$', '$$') + '"'
+}
+
+function Set-EnvFileValue($File, [string]$Name, [string]$Value) {
+    # Changes NAME=... in place, or adds it at the end.
+    $line = '{0}={1}' -f $Name, (Format-EnvFileValue $Value)
+    for ($i = 0; $i -lt $File.Lines.Count; $i++) {
+        if ($File.Lines[$i] -match ('^\s*(?:export\s+)?' + [regex]::Escape($Name) + '\s*=')) { $File.Lines[$i] = $line; return }
+    }
+    while ($File.Lines.Count -and $File.Lines[$File.Lines.Count - 1].Trim() -eq '') { $File.Lines.RemoveAt($File.Lines.Count - 1) }
+    $File.Lines.Add($line)
+    $File.EndsWithNewline = $true
+}
+
+function Format-ComposeEnvLine([int]$Indent, [string]$Form, [string]$Name, [string]$Value) {
+    # $Value is written as-is (callers escape a literal '$' as '$$').
+    $pad = ' ' * $Indent
+    $plain = '^[A-Za-z0-9_./:@+,=%${}-]*$'
+    if ($Form -eq 'map') {
+        if ($Value -match $plain -and $Value -ne '') { return '{0}{1}: {2}' -f $pad, $Name, $Value }
+        return "{0}{1}: '{2}'" -f $pad, $Name, $Value.Replace("'", "''")
+    }
+    $item = '{0}={1}' -f $Name, $Value
+    if ($Value -match $plain) { return '{0}- {1}' -f $pad, $item }
+    return "{0}- '{1}'" -f $pad, $item.Replace("'", "''")
+}
+
+function Get-EnvVarReference([string]$Raw) {
+    # '${NAME}' or '${NAME:-default}' as the whole value -> NAME, otherwise ''.
+    if ($null -eq $Raw) { return '' }
+    $m = [regex]::Match($Raw.Trim(), '^\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?][^}]*)?\}$')
+    if ($m.Success) { return $m.Groups[1].Value }
+    $m = [regex]::Match($Raw.Trim(), '^\$([A-Za-z_][A-Za-z0-9_]*)$')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return ''
+}
+
+function Get-VarUseCount($Lines, [string]$Var) {
+    $n = 0
+    $pattern = '\$\{' + [regex]::Escape($Var) + '([:?}-])|\$' + [regex]::Escape($Var) + '(?![A-Za-z0-9_])'
+    foreach ($l in $Lines) { if ((Test-ContentLine $l) -and $l -match $pattern) { $n++ } }
+    return $n
+}
+
+function New-EnvVarName([string]$Service, [string]$Name, [hashtable]$Existing, [string]$Value) {
+    $svc = ($Service.ToUpperInvariant() -replace '[^A-Z0-9]+', '_').Trim('_')
+    $base = ($Name.ToUpperInvariant() -replace '[^A-Z0-9_]+', '_').Trim('_')
+    if (-not $base) { $base = 'VALUE' }
+    if (-not $base.StartsWith($svc + '_') -and $base -ne $svc) { $base = '{0}_{1}' -f $svc, $base }
+    if ($base -match '^[0-9]') { $base = '_' + $base }
+    $candidate = $base; $n = 2
+    while ($Existing.ContainsKey($candidate) -and $Existing[$candidate].Value -ne $Value) { $candidate = '{0}_{1}' -f $base, $n; $n++ }
+    return $candidate
+}
+
+# ---------------------------------------------------------------------------
 # Compose file choice
 # ---------------------------------------------------------------------------
 function Update-RecentList {
@@ -1572,6 +1808,7 @@ function Import-ComposeConfig($Config, [hashtable]$Hashes) {
     }
     $script:ConfigError = ''
     $services = Get-PropValue $Config 'services'
+    $script:ServiceConfigs = @{}
     $seen = @{}
     $added = 0
     if ($services) {
@@ -1579,6 +1816,7 @@ function Import-ComposeConfig($Config, [hashtable]$Hashes) {
             $name = $prop.Name
             $svc = $prop.Value
             $seen[$name] = $true
+            $script:ServiceConfigs[$name] = $svc
             $labels = Get-ServiceLabels $svc
             $group = if ($labels.ContainsKey("$prefix.group") -and $labels["$prefix.group"].Trim()) { $labels["$prefix.group"].Trim() } else { $script:UngroupedName }
             $ports = Get-PortInfo $svc $(if ($labels.ContainsKey("$prefix.url")) { $labels["$prefix.url"].Trim() } else { '' })
@@ -1944,6 +2182,7 @@ function Update-SelectionButtons {
     $ui.BtnStop.IsEnabled = (@($sel | Where-Object IsRunning).Count -gt 0)
     $ui.BtnRestart.IsEnabled = ($withContainer -gt 0)
     $ui.BtnUpdate.IsEnabled = ($inCompose -gt 0)
+    $ui.BtnConfigure.IsEnabled = ($sel.Count -eq 1 -and $sel[0].InCompose)
     $ui.BtnLogs.IsEnabled = ($sel.Count -eq 1 -and $sel[0].HasContainer)
     $ui.BtnOpen.IsEnabled = ($sel.Count -eq 1 -and $sel[0].HasUrl)
 }
@@ -2369,6 +2608,510 @@ function Show-Check {
 }
 
 # ---------------------------------------------------------------------------
+# Configure window (one per service)
+# ---------------------------------------------------------------------------
+$configureXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="980" Height="680" MinWidth="700" MinHeight="460" WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <DockPanel Margin="14">
+        <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock x:Name="TxtCfgTitle" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock x:Name="TxtCfgInfo" Foreground="{StaticResource SoftInk}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="BtnCfgWeb" Content="Web page" Tag="&#xE774;" Style="{StaticResource Btn}" ToolTip="Open the container's web page"/>
+                <Button x:Name="BtnCfgFolder" Content="Folders" Tag="&#xE8B7;" Style="{StaticResource Btn}" ToolTip="Open one of the host folders this container uses"/>
+                <Button x:Name="BtnCfgShell" Content="Shell" Tag="&#xE756;" Style="{StaticResource Btn}" ToolTip="Open a command prompt inside the running container"/>
+                <Button x:Name="BtnCfgLogs" Content="Logs" Tag="&#xE9F9;" Style="{StaticResource Btn}" Margin="0"/>
+            </StackPanel>
+        </Grid>
+
+        <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+                <CheckBox x:Name="ChkCfgTemplates" IsChecked="True" Visibility="Collapsed"/>
+                <TextBlock x:Name="TxtCfgStatus" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="BtnCfgSaveRecreate" Content="Save and recreate" Tag="&#xE72C;" Style="{StaticResource PrimaryBtn}"
+                        ToolTip="Save, then recreate the container so it uses the new values (data is kept)"/>
+                <Button x:Name="BtnCfgSave" Content="Save" Tag="&#xE74E;" Style="{StaticResource Btn}"
+                        ToolTip="Save the changes. The container shows Changed until it's recreated."/>
+                <Button x:Name="BtnCfgClose" Content="Close" Style="{StaticResource Btn}" IsCancel="True" Margin="0"/>
+            </StackPanel>
+        </Grid>
+
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,10,0,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="Name" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBox x:Name="TxtEnvName" Grid.Column="1" Style="{StaticResource Field}" IsReadOnly="True"/>
+                <TextBlock Grid.Row="1" Text="Value" VerticalAlignment="Center" Margin="0,8,10,0"/>
+                <Grid Grid.Row="1" Grid.Column="1" Margin="0,8,0,0">
+                    <TextBox x:Name="TxtEnvValue" Style="{StaticResource Field}"/>
+                    <PasswordBox x:Name="PwdEnvValue" Padding="6,4" BorderBrush="{StaticResource Edge}" Visibility="Collapsed"/>
+                </Grid>
+                <TextBlock x:Name="TxtEnvFrom" Grid.Row="2" Grid.Column="1" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
+                    <Button x:Name="BtnEnvSet" Content="Set" Tag="&#xE73E;" Style="{StaticResource Btn}" IsDefault="True"
+                            ToolTip="Use this value (saved when you press Save)"/>
+                    <Button x:Name="BtnEnvMove" Content="Move to .env" Tag="&#xE8DE;" Style="{StaticResource Btn}"
+                            ToolTip="Keep the value in .env and put a ${NAME} reference in the compose file instead"/>
+                    <Button x:Name="BtnEnvAdd" Content="Add variable" Tag="&#xE710;" Style="{StaticResource Btn}"
+                            ToolTip="Add a new environment variable to this service (its value goes in .env)"/>
+                    <Button x:Name="BtnEnvUndo" Content="Undo" Tag="&#xE7A7;" Style="{StaticResource Btn}" Margin="0"
+                            ToolTip="Forget the change to this variable"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid DockPanel.Dock="Top" Margin="0,0,0,6">
+            <TextBlock Text="Environment variables" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            <CheckBox x:Name="ChkCfgReveal" Content="Show passwords and keys" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+        </Grid>
+        <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="2">
+            <Grid>
+                <DataGrid x:Name="GridEnv" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column"
+                          GridLinesVisibility="None" BorderThickness="0" Background="Transparent" RowBackground="Transparent"
+                          SelectionMode="Single" SelectionUnit="FullRow" CanUserAddRows="False" RowHeight="28">
+                    <DataGrid.RowStyle>
+                        <Style TargetType="DataGridRow">
+                            <Setter Property="BorderThickness" Value="4,0,0,0"/>
+                            <Setter Property="BorderBrush" Value="Transparent"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="#F3F7FC"/>
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background" Value="#BFD9F7"/>
+                                    <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+                                    <Setter Property="FontWeight" Value="Bold"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGrid.RowStyle>
+                    <DataGrid.CellStyle>
+                        <Style TargetType="DataGridCell">
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="DataGridCell">
+                                        <Border Padding="8,0" Background="Transparent">
+                                            <ContentPresenter VerticalAlignment="Center"/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </DataGrid.CellStyle>
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="230"/>
+                        <DataGridTextColumn Header="Value" Binding="{Binding Shown}" Width="*"/>
+                        <DataGridTextColumn Header="Kept in" Binding="{Binding From}" Width="200"/>
+                        <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="110"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+                <TextBlock x:Name="TxtEnvEmpty" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{StaticResource SoftInk}"
+                           Text="This service has no environment variables yet. Press Add variable to give it one." Visibility="Collapsed"/>
+            </Grid>
+        </Border>
+    </DockPanel>
+</Window>
+'@
+
+function Get-ServiceFolders([string]$Service) {
+    # Host folders (bind mounts) of a service, from the last docker compose config.
+    $list = New-Object System.Collections.ArrayList
+    $svc = if ($script:ServiceConfigs) { $script:ServiceConfigs[$Service] } else { $null }
+    if (-not $svc) { return @() }
+    foreach ($v in @(Get-PropValue $svc 'volumes')) {
+        if ($null -eq $v) { continue }
+        if ([string](Get-PropValue $v 'type') -ne 'bind') { continue }
+        $src = [string](Get-PropValue $v 'source')
+        $dst = [string](Get-PropValue $v 'target')
+        if ($src) { [void]$list.Add(@{ Source = $src; Target = $dst }) }
+    }
+    return @($list)
+}
+
+function Get-ConfigureEnvPath { return (Join-Path $script:ComposeDir '.env') }
+
+function Import-ConfigureEntries($State) {
+    $compose = Read-TextFile $script:ComposePath
+    $info = Find-ServiceEnv $compose.Lines $State.Service
+    $envVals = Get-EnvFileValues (Get-ConfigureEnvPath)
+    $State.Entries.Clear()
+    $State.Info = $info
+    $State.Stamp = Get-FileStamp
+    if (-not $info.Found) {
+        $State.Status.Text = "Couldn't find '$($State.Service)' in the compose file."
+        return
+    }
+    foreach ($e in $info.Entries) {
+        $x = New-Object Dcm.EnvEntry
+        $x.Name = $e.Name; $x.Raw = [string]$e.Raw; $x.Line = $e.Line; $x.Form = $e.Form
+        $var = Get-EnvVarReference $e.Raw
+        $x.Secret = ($e.Name -match $script:SecretNamePattern) -or ($var -and $var -match $script:SecretNamePattern)
+        if ($var) {
+            $x.VarName = $var
+            $x.Editable = $true
+            $uses = Get-VarUseCount $compose.Lines $var
+            $x.From = if ($uses -gt 1) { '.env: {0} (used {1} times)' -f $var, $uses } else { '.env: ' + $var }
+            $x.Original = if ($envVals.ContainsKey($var)) { $envVals[$var].Value } else { '' }
+            $x.Missing = -not $envVals.ContainsKey($var)
+        } elseif ($null -eq $e.Raw) {
+            $x.From = "This PC's environment"
+            $x.Original = [string][Environment]::GetEnvironmentVariable($e.Name)
+            $x.Editable = $false
+        } elseif ($e.Raw.Replace('$$', '').Contains('$')) {
+            $x.From = 'Compose file (uses .env)'
+            $x.Original = $e.Raw
+            $x.Editable = $false
+        } else {
+            $x.From = 'Compose file, line {0}' -f ($e.Line + 1)
+            $x.Original = $e.Raw.Replace('$$', '$')
+            $x.Editable = $true
+            $x.Literal = $true
+        }
+        $x.Value = $x.Original
+        $x.Reveal = [bool]$State.Reveal.IsChecked
+        $State.Entries.Add($x)
+    }
+    $State.EmptyText.Visibility = if ($State.Entries.Count) { 'Collapsed' } else { 'Visible' }
+    $notes = @()
+    if ($info.EnvFiles.Count) {
+        $files = @($info.EnvFiles | ForEach-Object { Resolve-ComposeVars $_ (Get-EnvTable $envVals) })
+        $notes += 'It also reads variables from ' + ($files -join ', ') + ' (open that file to change them).'
+    }
+    if (-not (Test-Path -LiteralPath (Get-ConfigureEnvPath))) { $notes += "There's no .env yet; saving creates one." }
+    $State.Status.Text = ($notes -join '  ')
+}
+
+function Get-EnvTable([hashtable]$EnvValues) {
+    $t = @{}
+    foreach ($k in $EnvValues.Keys) { $t[$k] = $EnvValues[$k].Value }
+    return $t
+}
+
+function Show-ConfigureEntry($State) {
+    $x = $State.Grid.SelectedItem
+    $State.Loading = $true
+    try {
+        $has = $x -is [Dcm.EnvEntry]
+        $State.NameBox.Text = if ($has) { $x.Name } else { '' }
+        $State.NameBox.IsReadOnly = -not ($has -and $x.IsNew)
+        $value = if ($has) { $x.Value } else { '' }
+        $State.ValueBox.Text = $value
+        $State.PwdBox.Password = $value
+        $masked = $has -and $x.Secret -and -not $State.Reveal.IsChecked
+        $State.ValueBox.Visibility = if ($masked) { 'Collapsed' } else { 'Visible' }
+        $State.PwdBox.Visibility = if ($masked) { 'Visible' } else { 'Collapsed' }
+        $editable = $has -and $x.Editable
+        $State.ValueBox.IsReadOnly = -not $editable
+        $State.PwdBox.IsEnabled = $editable
+        $State.SetBtn.IsEnabled = $editable
+        $State.MoveBtn.IsEnabled = $has -and $x.Literal -and -not $x.MoveToEnv
+        $State.UndoBtn.IsEnabled = $has -and ($x.Status -ne '')
+        $State.FromText.Text = if (-not $has) { 'Pick a variable above, or press Add variable.' }
+        elseif ($x.IsNew) { 'New variable. Its value is saved in .env and the compose file gets a ${NAME} reference to it.' }
+        elseif ($x.MoveToEnv) { 'The value moves to .env when you save, and the compose file gets a ${NAME} reference instead.' }
+        elseif ($x.VarName) {
+            $t = 'Saved in .env as {0}.' -f $x.VarName
+            if ($x.Missing) { $t += " It isn't in .env yet, so the container gets an empty value." }
+            if ($x.From -match 'used (\d+) times') { $t += ' Other services use it too, so changing it changes them as well.' }
+            $t
+        }
+        elseif ($x.Literal) {
+            $t = 'Written in the compose file on line {0}.' -f ($x.Line + 1)
+            if ($x.Secret) { $t += ' Move to .env keeps passwords and keys out of the compose file.' }
+            $t
+        }
+        elseif ($x.From -like 'This PC*') { "Taken from this PC's own environment variables. Set it in Windows, or add it to .env." }
+        else { "This value mixes text and variables, so change it in the compose file (Edit) or the variables in .env." }
+    } finally { $State.Loading = $false }
+}
+
+function Set-ConfigureEntry($State) {
+    $x = $State.Grid.SelectedItem
+    if (-not ($x -is [Dcm.EnvEntry]) -or -not $x.Editable) { return }
+    $value = if ($State.PwdBox.Visibility -eq 'Visible') { $State.PwdBox.Password } else { $State.ValueBox.Text }
+    if ($x.IsNew) {
+        $name = $State.NameBox.Text.Trim()
+        if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_.-]*$') {
+            [void][Windows.MessageBox]::Show($State.Window, 'Use letters, numbers and _ for the name, starting with a letter.', $script:AppName, 'OK', 'Information'); return
+        }
+        foreach ($o in $State.Entries) {
+            if ($o -ne $x -and $o.Name -eq $name) { [void][Windows.MessageBox]::Show($State.Window, "There's already a variable called $name.", $script:AppName, 'OK', 'Information'); return }
+        }
+        $x.Name = $name
+        $x.Secret = $name -match $script:SecretNamePattern
+    }
+    $x.Value = $value
+    Show-ConfigureEntry $State
+    Update-ConfigureButtons $State
+}
+
+function Update-ConfigureButtons($State) {
+    $changed = @($State.Entries | Where-Object { $_.Status -ne '' }).Count
+    $State.SaveBtn.IsEnabled = $changed -gt 0
+    $State.SaveRecreateBtn.IsEnabled = $changed -gt 0
+    $State.SaveRecreateBtn.Content = if ($State.Row.HasContainer) { 'Save and recreate' } else { 'Save' }
+    $State.SaveBtn.Visibility = if ($State.Row.HasContainer) { 'Visible' } else { 'Collapsed' }
+    $State.Window.Title = if ($changed) { 'Configure: {0} ({1} unsaved)' -f $State.Service, $changed } else { 'Configure: ' + $State.Service }
+    $templates = @($State.Templates)
+    $needsEnv = @($State.Entries | Where-Object { $_.IsNew -or $_.MoveToEnv }).Count
+    $State.Templates_Check.Visibility = if ($templates.Count -and $needsEnv) { 'Visible' } else { 'Collapsed' }
+}
+
+function Save-ConfigureEntries($State, [switch]$Recreate) {
+    $changed = @($State.Entries | Where-Object { $_.Status -ne '' })
+    if (-not $changed.Count) { return }
+    if ((Get-FileStamp) -ne $State.Stamp) {
+        [void][Windows.MessageBox]::Show($State.Window, "The compose file or .env was changed somewhere else since this window opened, so nothing was saved.`n`nYour changes are still listed. Note them, then press Reload.", $script:AppName, 'OK', 'Warning')
+        return
+    }
+    $compose = Read-TextFile $script:ComposePath
+    $info = Find-ServiceEnv $compose.Lines $State.Service
+    foreach ($x in $changed) {
+        if ($x.IsNew) { continue }
+        $match = @($info.Entries | Where-Object { $_.Line -eq $x.Line -and $_.Name -eq $x.Name })
+        if (-not $match.Count) {
+            [void][Windows.MessageBox]::Show($State.Window, "The compose file doesn't match what this window read any more, so nothing was saved. Press Reload.", $script:AppName, 'OK', 'Warning')
+            return
+        }
+    }
+    $envPath = Get-ConfigureEnvPath
+    $envExists = Test-Path -LiteralPath $envPath
+    $envFile = if ($envExists) { Read-TextFile $envPath } else {
+        @{ Path = $envPath; Lines = (New-Object System.Collections.Generic.List[string]); Bom = $false; NewLine = "`r`n"; EndsWithNewline = $true }
+    }
+    $envVals = Get-EnvFileValues $envPath
+    $composeChanged = $false; $envChanged = $false
+    $newVars = [ordered]@{}
+    $inserts = New-Object System.Collections.ArrayList
+    $log = New-Object System.Collections.ArrayList
+
+    foreach ($x in $changed) {
+        if ($x.IsNew) {
+            $var = New-EnvVarName $State.Service $x.Name $envVals $x.Value
+            Set-EnvFileValue $envFile $var $x.Value; $envChanged = $true
+            $envVals[$var] = @{ Value = $x.Value; Line = -1 }
+            $newVars[$var] = $x.Value
+            [void]$inserts.Add(@($x.Name, ('${' + $var + '}')))
+            [void]$log.Add("added $($x.Name) (value in .env as $var)")
+        } elseif ($x.VarName) {
+            Set-EnvFileValue $envFile $x.VarName $x.Value; $envChanged = $true
+            $envVals[$x.VarName] = @{ Value = $x.Value; Line = -1 }
+            [void]$log.Add("changed $($x.VarName) in .env")
+        } elseif ($x.MoveToEnv) {
+            $var = New-EnvVarName $State.Service $x.Name $envVals $x.Value
+            Set-EnvFileValue $envFile $var $x.Value; $envChanged = $true
+            $envVals[$var] = @{ Value = $x.Value; Line = -1 }
+            $newVars[$var] = $x.Value
+            $compose.Lines[$x.Line] = Format-ComposeEnvLine (Get-LineIndent $compose.Lines[$x.Line]) $x.Form $x.Name ('${' + $var + '}')
+            $composeChanged = $true
+            [void]$log.Add("moved $($x.Name) to .env as $var")
+        } elseif ($x.Literal) {
+            $compose.Lines[$x.Line] = Format-ComposeEnvLine (Get-LineIndent $compose.Lines[$x.Line]) $x.Form $x.Name ($x.Value.Replace('$', '$$'))
+            $composeChanged = $true
+            [void]$log.Add("changed $($x.Name) in the compose file")
+        }
+    }
+
+    if ($inserts.Count) {
+        $form = if ($info.Form) { $info.Form } else { 'list' }
+        $itemIndent = if ($info.ItemIndent -ge 0) { $info.ItemIndent } else { $info.KeyIndent + 2 }
+        $newLines = New-Object System.Collections.Generic.List[string]
+        if ($info.EnvLine -lt 0) { $newLines.Add((' ' * $info.KeyIndent) + 'environment:') }
+        foreach ($p in $inserts) { $newLines.Add((Format-ComposeEnvLine $itemIndent $form $p[0] $p[1])) }
+        $at = if ($info.Entries.Count) { ($info.Entries | ForEach-Object { $_.Line } | Measure-Object -Maximum).Maximum + 1 }
+        elseif ($info.EnvLine -ge 0) { $info.EnvLine + 1 }
+        else { $info.End + 1 }
+        $compose.Lines.InsertRange($at, $newLines)
+        $composeChanged = $true
+    }
+
+    try {
+        $backups = @()
+        if ($composeChanged) { $backups += Backup-ConfigFile $script:ComposePath }
+        if ($envChanged -and $envExists) { $backups += Backup-ConfigFile $envPath }
+        if ($composeChanged) { Write-TextFile $compose }
+        if ($envChanged) { Write-TextFile $envFile }
+        if ($newVars.Count -and $State.Templates_Check.IsChecked) {
+            foreach ($t in @($State.Templates)) {
+                $tf = Read-TextFile $t
+                $have = Get-EnvFileValues $t
+                $added = 0
+                foreach ($k in $newVars.Keys) { if (-not $have.ContainsKey($k)) { Set-EnvFileValue $tf $k $newVars[$k]; $added++ } }
+                if ($added) { Write-TextFile $tf; [void]$log.Add("added $added value(s) to $([IO.Path]::GetFileName($t))") }
+            }
+        }
+    } catch {
+        [void][Windows.MessageBox]::Show($State.Window, "Saving failed: $($_.Exception.Message)", $script:AppName, 'OK', 'Error')
+        Write-Activity "Configure $($State.Service): saving failed: $($_.Exception.Message)"
+        return
+    }
+    Write-Activity ("Configure {0}: {1}." -f $State.Service, ($log -join ', '))
+    foreach ($b in $backups) { if ($b) { Write-Activity "Backup: $b" } }
+    Import-ConfigureEntries $State
+    Update-ConfigureButtons $State
+    $script:FileStamp = Get-FileStamp
+    Request-ConfigLoad
+    if ($Recreate -and $State.Row.HasContainer) {
+        Add-Job ('Apply settings: ' + $State.Service) (Get-RecreateSteps @($State.Row) -Force)
+        $State.Status.Text = 'Saved. Recreating the container with the new values...'
+    } else {
+        $State.Status.Text = if ($State.Row.HasContainer) { 'Saved. The container shows Changed until you recreate it.' } else { 'Saved. The container uses the new values when it is created.' }
+    }
+}
+
+function Backup-ConfigFile([string]$Path) {
+    # Copies to %APPDATA%\Docker Container Manager\Backups\<project>\, not next to the file.
+    if (-not (Test-Path -LiteralPath $Path)) { return '' }
+    $project = if ($script:ProjectName) { $script:ProjectName } else { 'compose' }
+    $dir = Join-Path (Join-Path $script:SettingsDir 'Backups') $project
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $target = Join-Path $dir ('{0}.{1}.bak' -f [IO.Path]::GetFileName($Path), (Get-Date).ToString('yyyy-MM-dd_HHmmss'))
+    Copy-Item -LiteralPath $Path -Destination $target -Force
+    return $target
+}
+
+function Open-ContainerShell([Dcm.Row]$Row) {
+    if (-not $Row -or -not $Row.IsRunning -or -not $script:DockerExe) { return }
+    $argLine = 'exec -it {0} sh -c "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"' -f $Row.ContainerName
+    try {
+        Start-Process -FilePath $script:DockerExe -ArgumentList $argLine
+        Write-Activity "Opened a shell in $($Row.ContainerName)"
+    } catch { [void][Windows.MessageBox]::Show($window, "Couldn't open a shell: $($_.Exception.Message)", $script:AppName, 'OK', 'Error') }
+}
+
+function Show-Configure([Dcm.Row]$Row) {
+    if (-not $Row -or -not $Row.InCompose -or -not $script:ComposePath) { return }
+    foreach ($open in @($script:ConfigureWindows)) {
+        if ($open.Service -eq $Row.Service) { $open.Window.Activate(); return }
+    }
+    $w = New-XamlObject $configureXaml
+    $w.Owner = $window
+    if ($window.Icon) { $w.Icon = $window.Icon }
+    $state = @{
+        Window = $w; Row = $Row; Service = $Row.Service; Info = $null; Stamp = ''; Loading = $false
+        Entries = New-Object 'System.Collections.ObjectModel.ObservableCollection[Dcm.EnvEntry]'
+        Templates = @(Get-ChildItem -LiteralPath $script:ComposeDir -Filter 'Env_*' -File -ErrorAction SilentlyContinue | ForEach-Object FullName)
+        Grid = $w.FindName('GridEnv'); EmptyText = $w.FindName('TxtEnvEmpty'); Reveal = $w.FindName('ChkCfgReveal')
+        NameBox = $w.FindName('TxtEnvName'); ValueBox = $w.FindName('TxtEnvValue'); PwdBox = $w.FindName('PwdEnvValue'); FromText = $w.FindName('TxtEnvFrom')
+        SetBtn = $w.FindName('BtnEnvSet'); MoveBtn = $w.FindName('BtnEnvMove'); AddBtn = $w.FindName('BtnEnvAdd'); UndoBtn = $w.FindName('BtnEnvUndo')
+        SaveBtn = $w.FindName('BtnCfgSave'); SaveRecreateBtn = $w.FindName('BtnCfgSaveRecreate'); Status = $w.FindName('TxtCfgStatus')
+        Templates_Check = $w.FindName('ChkCfgTemplates')
+    }
+    $names = @($state.Templates | ForEach-Object { [IO.Path]::GetFileName($_) })
+    $state.Templates_Check.Content = 'Also add new .env values to ' + ($names -join ', ') + ' (the templates you copy to other machines)'
+    $w.FindName('TxtCfgTitle').Text = $Row.Service
+    $w.FindName('TxtCfgInfo').Text = '{0}   ·   {1}   ·   {2}' -f $Row.Image, $Row.Group, $Row.StateText
+    $state.Grid.ItemsSource = $state.Entries
+    [void]$script:ConfigureWindows.Add($state)
+    $w.DataContext = $state
+
+    $web = $w.FindName('BtnCfgWeb'); $web.IsEnabled = $Row.HasUrl
+    $web.Add_Click({ $s = $this.DataContext; Open-Url $s.Row.Url })
+    $shell = $w.FindName('BtnCfgShell'); $shell.IsEnabled = $Row.IsRunning
+    if (-not $Row.IsRunning) { $shell.ToolTip = 'Start the container to open a shell in it' }
+    $shell.Add_Click({ $s = $this.DataContext; Open-ContainerShell $s.Row })
+    $logs = $w.FindName('BtnCfgLogs'); $logs.IsEnabled = $Row.HasContainer
+    $logs.Add_Click({ $s = $this.DataContext; Show-Logs $s.Row })
+
+    $folderBtn = $w.FindName('BtnCfgFolder')
+    $folders = @(Get-ServiceFolders $Row.Service)
+    $menu = New-Object Windows.Controls.ContextMenu
+    foreach ($f in $folders) {
+        $item = New-Object Windows.Controls.MenuItem
+        $item.Header = '{0}   ->   {1}' -f $f.Source, $f.Target
+        $item.Tag = $f.Source
+        $item.Add_Click({
+                $p = [string]$this.Tag
+                if (Test-Path -LiteralPath $p -PathType Container) { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$p`"" }
+                elseif (Test-Path -LiteralPath $p) { Start-Process -FilePath 'explorer.exe' -ArgumentList "/select,`"$p`"" }
+                else { [void][Windows.MessageBox]::Show("$p doesn't exist yet. Docker creates it when the container starts.", $script:AppName, 'OK', 'Information') }
+            })
+        [void]$menu.Items.Add($item)
+    }
+    $folderBtn.IsEnabled = ($folders.Count -gt 0)
+    if (-not $folders.Count) { $folderBtn.ToolTip = "This container doesn't use any host folders" }
+    $folderBtn.ContextMenu = $menu
+    $folderBtn.Add_Click({ $this.ContextMenu.PlacementTarget = $this; $this.ContextMenu.IsOpen = $true })
+
+    $state.Grid.Add_SelectionChanged({ param($src) try { Show-ConfigureEntry $src.DataContext } catch { Write-Activity "Configure: $($_.Exception.Message)" } })
+    $state.Reveal.Add_Click({
+            $s = $this.DataContext
+            foreach ($x in $s.Entries) { $x.Reveal = [bool]$s.Reveal.IsChecked }
+            Show-ConfigureEntry $s
+        })
+    $state.SetBtn.Add_Click({ Set-ConfigureEntry $this.DataContext })
+    $state.MoveBtn.Add_Click({
+            $s = $this.DataContext; $x = $s.Grid.SelectedItem
+            if ($x -is [Dcm.EnvEntry] -and $x.Literal) {
+                $x.Value = if ($s.PwdBox.Visibility -eq 'Visible') { $s.PwdBox.Password } else { $s.ValueBox.Text }
+                $x.MoveToEnv = $true
+                Show-ConfigureEntry $s; Update-ConfigureButtons $s
+            }
+        })
+    $state.AddBtn.Add_Click({
+            $s = $this.DataContext
+            $x = New-Object Dcm.EnvEntry
+            $x.Name = 'NEW_VARIABLE'; $x.IsNew = $true; $x.Editable = $true; $x.From = '.env (when saved)'; $x.Line = -1
+            $x.Reveal = [bool]$s.Reveal.IsChecked
+            $s.Entries.Add($x)
+            $s.EmptyText.Visibility = 'Collapsed'
+            $s.Grid.SelectedItem = $x
+            $s.Grid.ScrollIntoView($x)
+            [void]$s.NameBox.Focus(); $s.NameBox.SelectAll()
+            Update-ConfigureButtons $s
+        })
+    $state.UndoBtn.Add_Click({
+            $s = $this.DataContext; $x = $s.Grid.SelectedItem
+            if (-not ($x -is [Dcm.EnvEntry])) { return }
+            if ($x.IsNew) { [void]$s.Entries.Remove($x) } else { $x.MoveToEnv = $false; $x.Value = $x.Original }
+            Show-ConfigureEntry $s; Update-ConfigureButtons $s
+        })
+    $state.SaveBtn.Add_Click({ Save-ConfigureEntries $this.DataContext })
+    $state.SaveRecreateBtn.Add_Click({ $s = $this.DataContext; Save-ConfigureEntries $s -Recreate:($s.Row.HasContainer) })
+    $w.FindName('BtnCfgClose').Add_Click({ $this.DataContext.Window.Close() })
+    $w.Add_Closing({
+            param($src, $e)
+            $s = $src.DataContext
+            $n = @($s.Entries | Where-Object { $_.Status -ne '' }).Count
+            if ($n -and [Windows.MessageBox]::Show($src, "Close without saving $n change(s)?", $script:AppName, 'YesNo', 'Question') -ne 'Yes') { $e.Cancel = $true }
+        })
+    $w.Add_Closed({ $script:ConfigureWindows.Remove($this.DataContext) })
+    $w.Add_KeyDown({ param($src, $e) if ($e.Key -eq 'Escape') { $src.Close() } })
+
+    try { Import-ConfigureEntries $state } catch { $state.Status.Text = "Couldn't read the compose file: $($_.Exception.Message)" }
+    Update-ConfigureButtons $state
+    Show-ConfigureEntry $state
+    $w.Show()
+}
+
+# ---------------------------------------------------------------------------
 # Logs window (one per container; several can be open)
 # ---------------------------------------------------------------------------
 $logsXaml = @'
@@ -2640,12 +3383,17 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.01' = @(
+        'Configure window for each container: change environment variables, API keys and passwords (kept in .env), move values from the compose file to .env, add new variables.',
+        'Open a container''s host folders, a shell inside it, its web page and logs from the Configure window.'
+    )
     '1.00' = @(
         'Lists every service in your compose file with live status, web page, image and uptime.',
         'Groups from a label in the compose file (home.group), with Start, Stop and Update for a whole group.',
         'Start, stop, restart, update and recreate one container or a selection.',
         'Spots new, removed and changed services whenever the compose file or .env is saved.',
         'Logs window with follow, search, copy and save.',
+        'Check compose file: spacing, ${...} variables, port clashes, names and more.',
         'Tray icon with quick start and stop for each group.'
     )
 }
@@ -2891,6 +3639,7 @@ $ui.BtnStart.Add_Click({ Invoke-Start (Get-SelectedRows) })
 $ui.BtnStop.Add_Click({ Invoke-Stop (Get-SelectedRows) })
 $ui.BtnRestart.Add_Click({ Invoke-Restart (Get-SelectedRows) })
 $ui.BtnUpdate.Add_Click({ Invoke-Update (Get-SelectedRows) })
+$ui.BtnConfigure.Add_Click({ $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Show-Configure $sel[0] } })
 $ui.BtnLogs.Add_Click({ $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Show-Logs $sel[0] } })
 $ui.BtnOpen.Add_Click({ $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Open-Url $sel[0].Url } })
 $ui.BtnApply.Add_Click({ Invoke-ApplyChanges })
@@ -2943,6 +3692,7 @@ $ui.RowMenu.Add_Opened({
         $ui.MnuRestart.IsEnabled = (@($sel | Where-Object HasContainer).Count -gt 0)
         $ui.MnuUpdate.IsEnabled = (@($sel | Where-Object InCompose).Count -gt 0)
         $ui.MnuRecreate.IsEnabled = (@($sel | Where-Object { $_.InCompose -and $_.HasContainer }).Count -gt 0)
+        $ui.MnuConfigure.IsEnabled = ($sel.Count -eq 1 -and $sel[0].InCompose)
         $ui.MnuLogs.IsEnabled = ($sel.Count -eq 1 -and $sel[0].HasContainer)
         $ui.MnuOpen.IsEnabled = ($sel.Count -eq 1 -and $sel[0].HasUrl)
         $ui.MnuCopy.IsEnabled = ($sel.Count -gt 0)
@@ -2953,6 +3703,7 @@ $ui.MnuStop.Add_Click({ Invoke-Stop (Get-SelectedRows) })
 $ui.MnuRestart.Add_Click({ Invoke-Restart (Get-SelectedRows) })
 $ui.MnuUpdate.Add_Click({ Invoke-Update (Get-SelectedRows) })
 $ui.MnuRecreate.Add_Click({ Invoke-Recreate (Get-SelectedRows) })
+$ui.MnuConfigure.Add_Click({ $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Show-Configure $sel[0] } })
 $ui.MnuLogs.Add_Click({ $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Show-Logs $sel[0] } })
 $ui.MnuOpen.Add_Click({ $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Open-Url $sel[0].Url } })
 $ui.MnuCopy.Add_Click({ $names = @(Get-SelectedRows | ForEach-Object Service); if ($names.Count) { [Windows.Clipboard]::SetText($names -join "`r`n") } })
@@ -2963,6 +3714,7 @@ $window.Add_PreviewKeyDown({
         $ctrl = ([Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Control)
         if ($e.Key -eq 'F5') { Request-ConfigLoad; $script:NextPoll = [DateTime]::MinValue; $e.Handled = $true }
         elseif ($ctrl -and $e.Key -eq 'F') { [void]$ui.TxtSearch.Focus(); $ui.TxtSearch.SelectAll(); $e.Handled = $true }
+        elseif ($ctrl -and $e.Key -eq 'E') { $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Show-Configure $sel[0] }; $e.Handled = $true }
         elseif ($ctrl -and $e.Key -eq 'L') { $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Show-Logs $sel[0] }; $e.Handled = $true }
         elseif ($e.Key -eq 'Escape' -and $ui.TxtSearch.IsKeyboardFocusWithin) { $ui.TxtSearch.Clear(); [void]$ui.Grid.Focus(); $e.Handled = $true }
         elseif ($e.Key -eq 'Return' -and $ui.Grid.IsKeyboardFocusWithin) { $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Open-Url $sel[0].Url }; $e.Handled = $true }
