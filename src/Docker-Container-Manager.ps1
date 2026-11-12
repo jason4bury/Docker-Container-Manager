@@ -19,7 +19,7 @@
       - an edited service is marked "Changed" until it is recreated.
 
     The app only edits the compose file or .env when you save changes in a
-    Configure window, and keeps a backup copy in %APPDATA% first.
+    Configure window or use Tidy spacing, and keeps a backup copy in %APPDATA% first.
 
 .PARAMETER ComposeFile
     Open this compose file instead of the last one used.
@@ -29,10 +29,10 @@
     Opens the window with the last compose file used.
 
 .EXAMPLE
-    "Docker Container Manager v1.01.exe" -ComposeFile "D:\Docker\docker-compose.yml"
+    "Docker Container Manager v1.02.exe" -ComposeFile "D:\Docker\docker-compose.yml"
 
 .NOTES
-    Version:   1.01 (keep in step with CHANGELOG.md)
+    Version:   1.02 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -44,7 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.01'
+$script:AppVersion = '1.02'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 
 #region BUNDLE-ASSETS
@@ -77,14 +77,17 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 #   Dcm.GroupEntry - one line in the Groups pane.
 #   Dcm.Finding    - one result of the compose file check.
 #   Dcm.EnvEntry   - one environment variable in the Configure window.
+#   Dcm.ImageInfo  - one image in the Disk usage window.
+#   Dcm.Native     - dark title bars (Windows 10 20H1 and later).
 # ---------------------------------------------------------------------------
-if (-not ('Dcm.EnvEntry' -as [type])) {
+if (-not ('Dcm.Native' -as [type])) {
     Add-Type -Language CSharp -ReferencedAssemblies System, System.Core -TypeDefinition @'
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Dcm {
@@ -216,6 +219,36 @@ namespace Dcm {
         public bool   IsRunning     { get { return B("IsRunning"); }     set { SetValue("IsRunning", value); } }
         public bool   Changed       { get { return B("Changed"); }       set { SetValue("Changed", value); } }
         public bool   Problem       { get { return B("Problem"); }       set { SetValue("Problem", value); } }
+        public bool   UpdateAvailable { get { return B("UpdateAvailable"); } set { SetValue("UpdateAvailable", value); } }
+        public string ColorLabel    { get { return S("ColorLabel"); }    set { SetValue("ColorLabel", value); } }
+        public string IconLabel     { get { return S("IconLabel"); }     set { SetValue("IconLabel", value); } }
+        public string IconKey       { get { return S("IconKey"); }       set { SetValue("IconKey", value); } }
+        public string GroupColor    { get { string c = S("GroupColor"); return c.Length > 0 ? c : "#97A3B3"; } set { SetValue("GroupColor", value); } }
+        public string Initial       { get { string s = S("Service"); return s.Length > 0 ? s.Substring(0, 1).ToUpperInvariant() : "?"; } }
+        public object Icon          { get { return GetValue("Icon"); }   set { SetValue("Icon", value); SetValue("HasIcon", value != null); } }
+        public bool   HasIcon       { get { return B("HasIcon"); } }
+    }
+
+    public class ImageInfo {
+        public string Repository { get; set; }
+        public string Tag        { get; set; }
+        public string Id         { get; set; }
+        public string Size       { get; set; }
+        public double Bytes      { get; set; }
+        public string Created    { get; set; }
+        public string UsedBy     { get; set; }
+        public string Name       { get { return Repository == "<none>" ? "(no name)" : Repository + ":" + Tag; } }
+    }
+
+    public static class Native {
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+        public static void DarkTitleBar(IntPtr hwnd) {
+            int on = 1;
+            try {
+                if (DwmSetWindowAttribute(hwnd, 20, ref on, 4) != 0) { DwmSetWindowAttribute(hwnd, 19, ref on, 4); }
+            } catch (Exception) { }
+        }
     }
 
     public class Finding {
@@ -263,6 +296,7 @@ namespace Dcm {
         public string Counts  { get { return S("Counts"); }  set { SetValue("Counts", value); } }
         public bool   Problem { get { return B("Problem"); } set { SetValue("Problem", value); } }
         public bool   Special { get { return B("Special"); } set { SetValue("Special", value); } }
+        public string Color   { get { string c = S("Color"); return c.Length > 0 ? c : "#97A3B3"; } set { SetValue("Color", value); } }
     }
 }
 '@
@@ -285,9 +319,14 @@ function Get-DefaultSettings {
         MinimiseToTray    = $false
         Editor            = 'C:\Program Files\Microsoft VS Code\code.exe'
         ShowActivity      = $true
-        WindowWidth       = 1280
-        WindowHeight      = 800
+        ViewMode          = 'List'
+        Theme             = 'System'
+        DownloadIcons     = $true
+        CheckUpdatesOnStart = $true
+        WindowWidth       = 1650
+        WindowHeight      = 1080
         WindowMaximised   = $false
+        LogHeight         = 221
     }
 }
 
@@ -308,6 +347,8 @@ function Read-Settings {
     if ([int]::TryParse([string]$s.RefreshSeconds, [ref]$refresh)) { $s.RefreshSeconds = [Math]::Min(300, [Math]::Max(2, $refresh)) }
     else { $s.RefreshSeconds = 15 }
     if (-not ([string]$s.LabelPrefix).Trim()) { $s.LabelPrefix = 'home' }
+    if ($s.ViewMode -notin 'List', 'Cards') { $s.ViewMode = 'List' }
+    if ($s.Theme -notin 'System', 'Light', 'Dark') { $s.Theme = 'System' }
     return $s
 }
 
@@ -463,24 +504,68 @@ function Update-Calls {
 }
 
 # ---------------------------------------------------------------------------
+# Theme: light or dark colours. "System" follows the Windows app setting.
+# A change applies the next time the app starts.
+# ---------------------------------------------------------------------------
+$script:Palettes = @{
+    Light = @{
+        Ink = '#1B2A3D'; SoftInk = '#5B6B80'; Page = '#F2F5F9'; Card = '#FFFFFF'; Edge = '#D9E1EA'; Accent = '#1769C2'
+        AccentSoft = '#E3EFFC'; Navy = '#0E2238'; Ok = '#2DA44E'; Warn = '#D99A06'; Bad = '#CF2F3F'; Off = '#97A3B3'
+        Orphan = '#8250DF'; Hover = '#F3F7FC'; GroupHover = '#F0F4F9'; Selected = '#BFD9F7'; NoteInk = '#B07A00'
+        HeadA = '#0E2238'; HeadB = '#1769C2'; BadgeBg = '#DDF4E4'; BadgeInk = '#1A7F37'
+        InfoBg = '#E3EFFC'; InfoEdge = '#9CC3F0'; WarnBg = '#FFF4D6'; WarnEdge = '#E8C66A'; ErrorBg = '#FDE3E6'; ErrorEdge = '#EBA2AA'
+    }
+    Dark = @{
+        Ink = '#E6EDF3'; SoftInk = '#9AA8B8'; Page = '#161B22'; Card = '#1F2630'; Edge = '#333D4A'; Accent = '#4C9BEA'
+        AccentSoft = '#23364D'; Navy = '#0B1220'; Ok = '#3FB950'; Warn = '#D8A31A'; Bad = '#F0626E'; Off = '#6E7B8B'
+        Orphan = '#A27BEA'; Hover = '#26303C'; GroupHover = '#26303C'; Selected = '#2B4A6E'; NoteInk = '#E3B341'
+        HeadA = '#0B1220'; HeadB = '#1A4F8A'; BadgeBg = '#1F3A28'; BadgeInk = '#56D364'
+        InfoBg = '#1D3350'; InfoEdge = '#3B6A9E'; WarnBg = '#3A2F12'; WarnEdge = '#8A6D1E'; ErrorBg = '#3D1E24'; ErrorEdge = '#8F3A45'
+    }
+}
+
+function Get-ThemeName {
+    $t = [string]$script:Settings.Theme
+    if ($t -eq 'Light' -or $t -eq 'Dark') { return $t }
+    try {
+        $v = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name AppsUseLightTheme -ErrorAction Stop
+        if ($v.AppsUseLightTheme -eq 0) { return 'Dark' }
+    } catch { Write-Verbose 'No Windows app theme setting, so light.' }
+    return 'Light'
+}
+
+$script:Theme = Get-ThemeName
+$script:Pal = $script:Palettes[$script:Theme]
+
+# Group colours, given out in name order. A home.color label on any service of a
+# group picks its own colour instead.
+$script:GroupPalette = @('#1769C2', '#2DA44E', '#D9822B', '#8250DF', '#CF2F3F', '#0E8A8A', '#B5508A', '#6E7B1E', '#4E5BD1', '#A86B32', '#1F9AD6', '#7A6A58')
+
+# ---------------------------------------------------------------------------
 # Shared look: colours and control styles used by every window
 # ---------------------------------------------------------------------------
 $script:SharedResources = @'
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <SolidColorBrush x:Key="Ink" Color="#1B2A3D"/>
-    <SolidColorBrush x:Key="SoftInk" Color="#5B6B80"/>
-    <SolidColorBrush x:Key="Page" Color="#F2F5F9"/>
-    <SolidColorBrush x:Key="Card" Color="#FFFFFF"/>
-    <SolidColorBrush x:Key="Edge" Color="#D9E1EA"/>
-    <SolidColorBrush x:Key="Accent" Color="#1769C2"/>
-    <SolidColorBrush x:Key="AccentSoft" Color="#E3EFFC"/>
-    <SolidColorBrush x:Key="Navy" Color="#0E2238"/>
-    <SolidColorBrush x:Key="Ok" Color="#2DA44E"/>
-    <SolidColorBrush x:Key="Warn" Color="#D99A06"/>
-    <SolidColorBrush x:Key="Bad" Color="#CF2F3F"/>
-    <SolidColorBrush x:Key="Off" Color="#97A3B3"/>
-    <SolidColorBrush x:Key="Orphan" Color="#8250DF"/>
+    <SolidColorBrush x:Key="Ink" Color="%%Ink%%"/>
+    <SolidColorBrush x:Key="SoftInk" Color="%%SoftInk%%"/>
+    <SolidColorBrush x:Key="Page" Color="%%Page%%"/>
+    <SolidColorBrush x:Key="Card" Color="%%Card%%"/>
+    <SolidColorBrush x:Key="Edge" Color="%%Edge%%"/>
+    <SolidColorBrush x:Key="Accent" Color="%%Accent%%"/>
+    <SolidColorBrush x:Key="AccentSoft" Color="%%AccentSoft%%"/>
+    <SolidColorBrush x:Key="Navy" Color="%%Navy%%"/>
+    <SolidColorBrush x:Key="Ok" Color="%%Ok%%"/>
+    <SolidColorBrush x:Key="Warn" Color="%%Warn%%"/>
+    <SolidColorBrush x:Key="Bad" Color="%%Bad%%"/>
+    <SolidColorBrush x:Key="Off" Color="%%Off%%"/>
+    <SolidColorBrush x:Key="Orphan" Color="%%Orphan%%"/>
+    <SolidColorBrush x:Key="Hover" Color="%%Hover%%"/>
+    <SolidColorBrush x:Key="GroupHover" Color="%%GroupHover%%"/>
+    <SolidColorBrush x:Key="Selected" Color="%%Selected%%"/>
+    <SolidColorBrush x:Key="NoteInk" Color="%%NoteInk%%"/>
+    <SolidColorBrush x:Key="BadgeBg" Color="%%BadgeBg%%"/>
+    <SolidColorBrush x:Key="BadgeInk" Color="%%BadgeInk%%"/>
     <BooleanToVisibilityConverter x:Key="B2V"/>
 
     <Style x:Key="Btn" TargetType="Button">
@@ -525,6 +610,7 @@ $script:SharedResources = @'
         <Setter Property="Foreground" Value="#FFFFFF"/>
     </Style>
     <Style x:Key="HeaderBtn" TargetType="Button" BasedOn="{StaticResource Btn}">
+        <Setter Property="Margin" Value="0,3,6,3"/>
         <Setter Property="Background" Value="#22FFFFFF"/>
         <Setter Property="BorderBrush" Value="#44FFFFFF"/>
         <Setter Property="Foreground" Value="#FFFFFF"/>
@@ -539,6 +625,25 @@ $script:SharedResources = @'
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="T" Property="TextDecorations" Value="Underline"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="IconBtn" TargetType="Button">
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Foreground" Value="{StaticResource SoftInk}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="5" Padding="6,4">
+                        <TextBlock Text="{TemplateBinding Tag}" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{TemplateBinding Foreground}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentSoft}"/>
+                            <Setter Property="Foreground" Value="{StaticResource Accent}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -572,9 +677,218 @@ $script:SharedResources = @'
 # window's XAML has <!--SHARED-->), so StaticResource lookups work at load time.
 $script:SharedInner = [regex]::Match($script:SharedResources, '(?s)<ResourceDictionary[^>]*>(.*)</ResourceDictionary>').Groups[1].Value
 
+# Dark mode only: Windows' own control looks are drawn for light backgrounds, so
+# text boxes, drop-down lists, menus and scroll bars get dark versions here.
+$script:DarkStyles = @'
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="%%Ink%%"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="%%Ink%%"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="%%Card%%"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="%%Card%%"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="%%SoftInk%%"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="%%Selected%%"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="%%Ink%%"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="%%Card%%"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="%%Ink%%"/>
+    <Style TargetType="TextBox">
+        <Setter Property="Background" Value="{StaticResource Card}"/>
+        <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource Edge}"/>
+        <Setter Property="CaretBrush" Value="{StaticResource Ink}"/>
+    </Style>
+    <Style TargetType="PasswordBox">
+        <Setter Property="Background" Value="{StaticResource Card}"/>
+        <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+        <Setter Property="CaretBrush" Value="{StaticResource Ink}"/>
+    </Style>
+    <Style TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+    </Style>
+    <Style TargetType="DataGridColumnHeader">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource SoftInk}"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Padding" Value="8,6"/>
+        <Setter Property="BorderBrush" Value="{StaticResource Edge}"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+    </Style>
+    <Style TargetType="ComboBoxItem">
+        <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBoxItem">
+                    <Border x:Name="Bd" Padding="8,4" Background="Transparent">
+                        <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Selected}"/>
+                        </Trigger>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Hover}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style TargetType="ComboBox">
+        <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid>
+                        <ToggleButton Focusable="False" ClickMode="Press"
+                                      IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border x:Name="B" Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="4">
+                                        <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="10" HorizontalAlignment="Right"
+                                                   VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{StaticResource SoftInk}"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="B" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <ContentPresenter IsHitTestVisible="False" Margin="8,4,26,4" VerticalAlignment="Center"
+                                          Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+                        <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False"
+                               IsOpen="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                            <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1"
+                                    MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                    MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                <ScrollViewer>
+                                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.5"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="DarkMenu" TargetType="ContextMenu">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContextMenu">
+                    <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="6" Padding="3">
+                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="DarkMenuItem" TargetType="MenuItem">
+        <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <Border x:Name="Bd" Padding="22,5,28,5" Background="Transparent" CornerRadius="4">
+                        <ContentPresenter ContentSource="Header" RecognizesAccessKey="True"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Hover}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="DarkSeparator" TargetType="Separator">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Separator">
+                    <Border Height="1" Margin="8,3" Background="{StaticResource Edge}"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="ScrollPage" TargetType="RepeatButton">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="ScrollThumb" TargetType="Thumb">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Thumb"><Border CornerRadius="4" Margin="2" Background="{StaticResource Off}"/></ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style TargetType="ScrollBar">
+        <Setter Property="Width" Value="12"/>
+        <Setter Property="MinWidth" Value="12"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollBar">
+                    <Track x:Name="PART_Track" IsDirectionReversed="True">
+                        <Track.DecreaseRepeatButton><RepeatButton Style="{StaticResource ScrollPage}" Command="ScrollBar.PageUpCommand"/></Track.DecreaseRepeatButton>
+                        <Track.IncreaseRepeatButton><RepeatButton Style="{StaticResource ScrollPage}" Command="ScrollBar.PageDownCommand"/></Track.IncreaseRepeatButton>
+                        <Track.Thumb><Thumb Style="{StaticResource ScrollThumb}"/></Track.Thumb>
+                    </Track>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="Orientation" Value="Horizontal">
+                <Setter Property="Width" Value="Auto"/>
+                <Setter Property="MinWidth" Value="0"/>
+                <Setter Property="Height" Value="12"/>
+                <Setter Property="MinHeight" Value="12"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ScrollBar">
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton><RepeatButton Style="{StaticResource ScrollPage}" Command="ScrollBar.PageLeftCommand"/></Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton><RepeatButton Style="{StaticResource ScrollPage}" Command="ScrollBar.PageRightCommand"/></Track.IncreaseRepeatButton>
+                                <Track.Thumb><Thumb Style="{StaticResource ScrollThumb}"/></Track.Thumb>
+                            </Track>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+'@
+if ($script:Theme -eq 'Dark') { $script:SharedInner += $script:DarkStyles }
+
 function New-XamlObject([string]$Xaml) {
-    $reader = New-Object System.Xml.XmlNodeReader ([xml]($Xaml.Replace('<!--SHARED-->', $script:SharedInner)))
-    return [Windows.Markup.XamlReader]::Load($reader)
+    $text = $Xaml.Replace('<!--SHARED-->', $script:SharedInner)
+    foreach ($k in $script:Pal.Keys) { $text = $text.Replace("%%$k%%", $script:Pal[$k]) }
+    $reader = New-Object System.Xml.XmlNodeReader ([xml]$text)
+    $obj = [Windows.Markup.XamlReader]::Load($reader)
+    if ($script:Theme -eq 'Dark' -and $obj -is [Windows.Window]) {
+        $obj.Add_SourceInitialized({
+                param($s)
+                try { [Dcm.Native]::DarkTitleBar((New-Object Windows.Interop.WindowInteropHelper($s)).Handle) } catch { Write-Verbose 'No dark title bar.' }
+            })
+    }
+    return $obj
+}
+
+# Dark menus: a ContextMenu doesn't pick up the window's styles by itself.
+function Set-MenuTheme($Menu, $Owner) {
+    if ($script:Theme -ne 'Dark' -or -not $Menu) { return }
+    $Menu.Style = $Owner.FindResource('DarkMenu')
+    foreach ($item in $Menu.Items) {
+        if ($item -is [Windows.Controls.MenuItem]) { $item.Style = $Owner.FindResource('DarkMenuItem') }
+        elseif ($item -is [Windows.Controls.Separator]) { $item.Style = $Owner.FindResource('DarkSeparator') }
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -583,7 +897,7 @@ function New-XamlObject([string]$Xaml) {
 $mainXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Docker Container Manager" Width="1280" Height="800" MinWidth="900" MinHeight="540"
+        Title="Docker Container Manager" Width="1650" Height="1080" MinWidth="900" MinHeight="540"
         WindowStartupLocation="CenterScreen" FontFamily="Segoe UI" FontSize="13"
         Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
@@ -594,7 +908,7 @@ $mainXaml = @'
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*" MinHeight="200"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition x:Name="LogRow" Height="170" MinHeight="0"/>
+            <RowDefinition x:Name="LogRow" Height="221" MinHeight="0"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
@@ -602,23 +916,24 @@ $mainXaml = @'
         <Border Grid.Row="0" Padding="16,12">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                    <GradientStop Color="#0E2238" Offset="0"/>
-                    <GradientStop Color="#1769C2" Offset="1"/>
+                    <GradientStop Color="%%HeadA%%" Offset="0"/>
+                    <GradientStop Color="%%HeadB%%" Offset="1"/>
                 </LinearGradientBrush>
             </Border.Background>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
                 <Image x:Name="ImgLogo" Width="44" Height="44" Margin="0,0,12,0" RenderOptions.BitmapScalingMode="HighQuality"/>
-                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <StackPanel x:Name="HeaderTitle" Grid.Column="1" VerticalAlignment="Center" Margin="0,0,16,0">
                     <TextBlock Text="Docker Container Manager" FontSize="20" FontWeight="SemiBold" Foreground="#FFFFFF"/>
-                    <TextBlock x:Name="TxtSubtitle" Foreground="#CFE0F5" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                    <TextBlock x:Name="TxtSubtitle" Foreground="#CFE0F5" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" MaxWidth="300" HorizontalAlignment="Left"/>
                 </StackPanel>
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <ComboBox x:Name="CmbRecent" Width="230" Margin="0,0,6,0" VerticalContentAlignment="Center"
+                <!-- The buttons wrap onto a second line when the window is narrow, so the title is never cut off. -->
+                <WrapPanel x:Name="HeaderButtons" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <ComboBox x:Name="CmbRecent" Width="230" Margin="0,3,16,3" VerticalContentAlignment="Center"
                               ToolTip="Switch to another compose file you've used on this PC"/>
                     <Button x:Name="BtnBrowse" Content="Compose file..." Tag="&#xE8E5;" Style="{DynamicResource HeaderBtn}"
                             ToolTip="Choose a docker-compose.yml"/>
@@ -628,16 +943,18 @@ $mainXaml = @'
                             ToolTip="Open the .env file next to the compose file"/>
                     <Button x:Name="BtnCheck" Content="Check" Tag="&#xE73E;" Style="{DynamicResource HeaderBtn}"
                             ToolTip="Check the compose file for spacing, ${...} variables, port clashes and other mistakes"/>
+                    <Button x:Name="BtnDisk" Content="Disk" Tag="&#xEDA2;" Style="{DynamicResource HeaderBtn}"
+                            ToolTip="How much space images, containers and the build cache use, and clean-up"/>
                     <Button x:Name="BtnFolder" Content="Folder" Tag="&#xE8B7;" Style="{DynamicResource HeaderBtn}"
                             ToolTip="Open the compose file's folder"/>
                     <Button x:Name="BtnSettings" Content="Settings" Tag="&#xE713;" Style="{DynamicResource HeaderBtn}"/>
-                    <Button x:Name="BtnAbout" Content="About" Tag="&#xE946;" Style="{DynamicResource HeaderBtn}" Margin="0"/>
-                </StackPanel>
+                    <Button x:Name="BtnAbout" Content="About" Tag="&#xE946;" Style="{DynamicResource HeaderBtn}" Margin="0,3,0,3"/>
+                </WrapPanel>
             </Grid>
         </Border>
 
         <!-- Banner: Docker not running, compose errors, missing .env -->
-        <Border x:Name="Banner" Grid.Row="1" Padding="16,9" Visibility="Collapsed" Background="#FFF4D6" BorderBrush="#E8C66A" BorderThickness="0,0,0,1">
+        <Border x:Name="Banner" Grid.Row="1" Padding="16,9" Visibility="Collapsed" Background="%%WarnBg%%" BorderBrush="%%WarnEdge%%" BorderThickness="0,0,0,1">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -680,7 +997,7 @@ $mainXaml = @'
                                             </Border>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="Bd" Property="Background" Value="#F0F4F9"/>
+                                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource GroupHover}"/>
                                                 </Trigger>
                                                 <Trigger Property="IsSelected" Value="True">
                                                     <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentSoft}"/>
@@ -695,11 +1012,13 @@ $mainXaml = @'
                             <DataTemplate>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock x:Name="N" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <Border x:Name="Swatch" Width="10" Height="10" CornerRadius="3" Margin="0,0,8,0" VerticalAlignment="Center" Background="{Binding Color}"/>
+                                    <TextBlock x:Name="N" Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal">
                                         <Ellipse Width="7" Height="7" Fill="{DynamicResource Bad}" Margin="6,0,6,0" VerticalAlignment="Center"
                                                  Visibility="{Binding Problem, Converter={StaticResource B2V}}" ToolTip="Something in this group needs a look"/>
                                         <TextBlock Text="{Binding Counts}" Foreground="{DynamicResource SoftInk}" FontSize="12" VerticalAlignment="Center"/>
@@ -710,6 +1029,7 @@ $mainXaml = @'
                                         <Setter TargetName="N" Property="FontStyle" Value="Italic"/>
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding Key}" Value="*">
+                                        <Setter TargetName="Swatch" Property="Visibility" Value="Collapsed"/>
                                         <Setter TargetName="N" Property="FontWeight" Value="SemiBold"/>
                                         <Setter TargetName="N" Property="FontStyle" Value="Normal"/>
                                     </DataTrigger>
@@ -744,8 +1064,10 @@ $mainXaml = @'
                         <TextBlock x:Name="SearchHint" Text="Search" Foreground="{DynamicResource Off}" Margin="27,0,0,0"
                                    VerticalAlignment="Center" IsHitTestVisible="False"/>
                     </Grid>
-                    <ComboBox x:Name="CmbState" Grid.Column="1" Width="130" Margin="6,0,0,0" VerticalContentAlignment="Center"
-                              ToolTip="Show only containers in this state"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="6,0,0,0">
+                        <ComboBox x:Name="CmbState" Width="150" VerticalContentAlignment="Center" ToolTip="Show only containers in this state"/>
+                        <Button x:Name="BtnView" Style="{DynamicResource Btn}" Margin="6,0,0,0" ToolTip="Switch between the list and cards (Ctrl+T)"/>
+                    </StackPanel>
                     <WrapPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
                         <Button x:Name="BtnStart" Content="Start" Tag="&#xE768;" Style="{DynamicResource Btn}" ToolTip="Start the selected containers (creates them if needed)"/>
                         <Button x:Name="BtnStop" Content="Stop" Tag="&#xE71A;" Style="{DynamicResource Btn}" ToolTip="Stop the selected containers"/>
@@ -779,6 +1101,8 @@ $mainXaml = @'
                             <Button x:Name="BtnGroupUpdate" Content="Update group" Tag="&#xE896;" Style="{DynamicResource Btn}"/>
                             <Button x:Name="BtnRemoveOrphans" Content="Remove all" Tag="&#xE74D;" Style="{DynamicResource Btn}" Visibility="Collapsed"
                                     ToolTip="Remove these containers. Their data folders are not touched."/>
+                            <Button x:Name="BtnCheckUpdates" Content="Check for updates" Tag="&#xE895;" Style="{DynamicResource Btn}"
+                                    ToolTip="Ask each image's registry whether a newer image is out. Nothing is downloaded."/>
                             <Button x:Name="BtnRefresh" Content="Refresh" Tag="&#xE72C;" Style="{DynamicResource Btn}" Margin="0" ToolTip="Read the compose file and status again (F5)"/>
                         </WrapPanel>
                     </Grid>
@@ -828,10 +1152,10 @@ $mainXaml = @'
                                     <Setter Property="BorderBrush" Value="Transparent"/>
                                     <Style.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter Property="Background" Value="#F3F7FC"/>
+                                            <Setter Property="Background" Value="{DynamicResource Hover}"/>
                                         </Trigger>
                                         <Trigger Property="IsSelected" Value="True">
-                                            <Setter Property="Background" Value="#BFD9F7"/>
+                                            <Setter Property="Background" Value="{DynamicResource Selected}"/>
                                             <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
                                             <Setter Property="FontWeight" Value="SemiBold"/>
                                         </Trigger>
@@ -848,15 +1172,34 @@ $mainXaml = @'
                                             <Setter Property="Template">
                                                 <Setter.Value>
                                                     <ControlTemplate TargetType="GroupItem">
-                                                        <Expander IsExpanded="True" Margin="0,2,0,2">
-                                                            <Expander.Header>
-                                                                <StackPanel Orientation="Horizontal">
-                                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="{DynamicResource Accent}"/>
-                                                                    <TextBlock Text="{Binding ItemCount, StringFormat=' ({0})'}" Foreground="{DynamicResource SoftInk}"/>
-                                                                </StackPanel>
-                                                            </Expander.Header>
-                                                            <ItemsPresenter/>
-                                                        </Expander>
+                                                        <StackPanel Margin="0,2,0,2">
+                                                            <ToggleButton x:Name="Toggle" IsChecked="True" Focusable="False" Cursor="Hand">
+                                                                <ToggleButton.Template>
+                                                                    <ControlTemplate TargetType="ToggleButton">
+                                                                        <Border Background="Transparent" Padding="4,5,4,5">
+                                                                            <StackPanel Orientation="Horizontal">
+                                                                                <TextBlock x:Name="Chevron" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                                                           VerticalAlignment="Center" Margin="2,0,8,0" Foreground="{DynamicResource SoftInk}"/>
+                                                                                <Border Width="4" Height="16" CornerRadius="2" Margin="0,0,8,0" Background="{Binding Items[0].GroupColor}"/>
+                                                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="{DynamicResource Ink}"/>
+                                                                                <TextBlock Text="{Binding ItemCount, StringFormat=' ({0})'}" Foreground="{DynamicResource SoftInk}"/>
+                                                                            </StackPanel>
+                                                                        </Border>
+                                                                        <ControlTemplate.Triggers>
+                                                                            <Trigger Property="IsChecked" Value="False">
+                                                                                <Setter TargetName="Chevron" Property="Text" Value="&#xE76C;"/>
+                                                                            </Trigger>
+                                                                        </ControlTemplate.Triggers>
+                                                                    </ControlTemplate>
+                                                                </ToggleButton.Template>
+                                                            </ToggleButton>
+                                                            <ItemsPresenter x:Name="Items"/>
+                                                        </StackPanel>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger SourceName="Toggle" Property="IsChecked" Value="False">
+                                                                <Setter TargetName="Items" Property="Visibility" Value="Collapsed"/>
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
                                                     </ControlTemplate>
                                                 </Setter.Value>
                                             </Setter>
@@ -872,11 +1215,27 @@ $mainXaml = @'
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
-                                <DataGridTextColumn Header="Container" Binding="{Binding Service}" Width="200" MinWidth="200" SortMemberPath="Service">
-                                    <DataGridTextColumn.ElementStyle>
-                                        <Style TargetType="TextBlock"><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
-                                    </DataGridTextColumn.ElementStyle>
-                                </DataGridTextColumn>
+                                <DataGridTemplateColumn Header="Container" Width="225" MinWidth="200" SortMemberPath="Service">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <DockPanel>
+                                                <Grid DockPanel.Dock="Left" Width="20" Height="20" Margin="0,0,8,0">
+                                                    <Border x:Name="Tile" CornerRadius="4" Background="{Binding GroupColor}">
+                                                        <TextBlock Text="{Binding Initial}" Foreground="#FFFFFF" FontSize="11" FontWeight="Bold"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <Image Source="{Binding Icon}" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                </Grid>
+                                                <TextBlock Text="{Binding Service}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                            </DockPanel>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding HasIcon}" Value="True">
+                                                    <Setter TargetName="Tile" Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
                                 <DataGridTextColumn Header="State" Binding="{Binding StateText}" Width="120" MinWidth="110"/>
                                 <DataGridTextColumn Header="Since" Binding="{Binding Since}" Width="120" MinWidth="110"/>
                                 <DataGridTemplateColumn Header="Web page" Width="140" MinWidth="120" SortMemberPath="Url">
@@ -889,12 +1248,12 @@ $mainXaml = @'
                                 </DataGridTemplateColumn>
                                 <DataGridTextColumn Header="Image" Binding="{Binding Image}" Width="*" MinWidth="150">
                                     <DataGridTextColumn.ElementStyle>
-                                        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#5B6B80"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+                                        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource SoftInk}"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
                                     </DataGridTextColumn.ElementStyle>
                                 </DataGridTextColumn>
                                 <DataGridTextColumn Header="Note" Binding="{Binding Note}" Width="190" MinWidth="170">
                                     <DataGridTextColumn.ElementStyle>
-                                        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#B07A00"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+                                        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource NoteInk}"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
                                     </DataGridTextColumn.ElementStyle>
                                 </DataGridTextColumn>
                             </DataGrid.Columns>
@@ -916,6 +1275,123 @@ $mainXaml = @'
                                 </ContextMenu>
                             </DataGrid.ContextMenu>
                         </DataGrid>
+                        <ListBox x:Name="Cards" Visibility="Collapsed" BorderThickness="0" Background="Transparent" Margin="6,2,2,2"
+                                 SelectionMode="Extended" IsSynchronizedWithCurrentItem="False"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="False"
+                                 VirtualizingPanel.IsVirtualizing="False">
+                            <ListBox.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                            </ListBox.ItemsPanel>
+                            <ListBox.GroupStyle>
+                                <GroupStyle>
+                                    <GroupStyle.HeaderTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="2,8,0,8">
+                                                <Border Width="4" Height="16" CornerRadius="2" Margin="0,0,8,0" Background="{Binding Items[0].GroupColor}"/>
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="{DynamicResource Ink}"/>
+                                                <TextBlock Text="{Binding ItemCount, StringFormat=' ({0})'}" Foreground="{DynamicResource SoftInk}"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </GroupStyle.HeaderTemplate>
+                                </GroupStyle>
+                            </ListBox.GroupStyle>
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Margin" Value="0,0,8,8"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="Sel" BorderThickness="2" BorderBrush="Transparent" CornerRadius="10" Background="Transparent">
+                                                    <ContentPresenter/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="Sel" Property="BorderBrush" Value="{DynamicResource Edge}"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="Sel" Property="BorderBrush" Value="{DynamicResource Accent}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border x:Name="Card" Width="246" Height="120" CornerRadius="8" Background="{DynamicResource Card}"
+                                            BorderBrush="{DynamicResource Edge}" BorderThickness="1" ToolTip="{Binding Description}">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="4"/>
+                                                <RowDefinition Height="*"/>
+                                            </Grid.RowDefinitions>
+                                            <Border CornerRadius="7,7,0,0" Background="{Binding GroupColor}"/>
+                                            <Grid Grid.Row="1" Margin="10,8,6,6">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="*"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
+                                                <Grid Width="36" Height="36" VerticalAlignment="Top" Margin="0,0,10,0">
+                                                    <Border x:Name="Tile" CornerRadius="8" Background="{Binding GroupColor}">
+                                                        <TextBlock Text="{Binding Initial}" Foreground="#FFFFFF" FontSize="17" FontWeight="SemiBold"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <Image Source="{Binding Icon}" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                </Grid>
+                                                <StackPanel Grid.Column="1">
+                                                    <DockPanel>
+                                                        <Ellipse Style="{DynamicResource Dot}" DockPanel.Dock="Right" Margin="6,0,4,0" VerticalAlignment="Center"/>
+                                                        <TextBlock Text="{Binding Service}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/>
+                                                    </DockPanel>
+                                                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                        <TextBlock Text="{Binding StateText}" Foreground="{DynamicResource SoftInk}" FontSize="12"/>
+                                                        <TextBlock x:Name="SinceText" Text="{Binding Since, StringFormat='  ·  {0}'}" Foreground="{DynamicResource SoftInk}"
+                                                                   FontSize="12" TextTrimming="CharacterEllipsis" MaxWidth="120"/>
+                                                    </StackPanel>
+                                                    <TextBlock Text="{Binding Note}" Foreground="{DynamicResource NoteInk}" FontSize="12" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                                                </StackPanel>
+                                                <DockPanel Grid.Row="1" Grid.ColumnSpan="2" LastChildFill="False" Margin="0,4,0,0">
+                                                    <Button DockPanel.Dock="Left" Style="{DynamicResource LinkBtn}" Content="{Binding Ports}" Tag="{Binding Url}" ToolTip="{Binding Url}"
+                                                            VerticalAlignment="Center" Visibility="{Binding HasUrl, Converter={StaticResource B2V}}"/>
+                                                    <Button x:Name="BLogs" DockPanel.Dock="Right" Style="{DynamicResource IconBtn}" Tag="&#xE9F9;" CommandParameter="logs" ToolTip="Logs"/>
+                                                    <Button x:Name="BConf" DockPanel.Dock="Right" Style="{DynamicResource IconBtn}" Tag="&#xE713;" CommandParameter="configure" ToolTip="Configure"/>
+                                                    <Button x:Name="BStop" DockPanel.Dock="Right" Style="{DynamicResource IconBtn}" Tag="&#xE71A;" CommandParameter="stop" ToolTip="Stop"/>
+                                                    <Button x:Name="BStart" DockPanel.Dock="Right" Style="{DynamicResource IconBtn}" Tag="&#xE768;" CommandParameter="start" ToolTip="Start"/>
+                                                </DockPanel>
+                                            </Grid>
+                                        </Grid>
+                                    </Border>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding HasIcon}" Value="True">
+                                            <Setter TargetName="Tile" Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                            <Setter TargetName="BStart" Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsRunning}" Value="False">
+                                            <Setter TargetName="BStop" Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding HasContainer}" Value="False">
+                                            <Setter TargetName="BLogs" Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding InCompose}" Value="False">
+                                            <Setter TargetName="BConf" Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Since}" Value="">
+                                            <Setter TargetName="SinceText" Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Description}" Value="">
+                                            <Setter TargetName="Card" Property="ToolTip" Value="{x:Null}"/>
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                         <TextBlock x:Name="TxtEmpty" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource SoftInk}"
                                    TextWrapping="Wrap" TextAlignment="Center" MaxWidth="420" Visibility="Collapsed"/>
                     </Grid>
@@ -962,11 +1438,11 @@ $mainXaml = @'
 
 $window = New-XamlObject $mainXaml
 $ui = @{}
-foreach ($name in 'ImgLogo', 'TxtSubtitle', 'CmbRecent', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnFolder', 'BtnSettings', 'BtnAbout',
+foreach ($name in 'ImgLogo', 'HeaderTitle', 'HeaderButtons', 'TxtSubtitle', 'CmbRecent', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnDisk', 'BtnFolder', 'BtnSettings', 'BtnAbout',
     'Banner', 'BannerGlyph', 'BannerText', 'CmbEnvTemplate', 'BannerAction', 'BannerRetry',
-    'LstGroups', 'TxtSearch', 'SearchHint', 'CmbState', 'BtnStart', 'BtnStop', 'BtnRestart', 'BtnUpdate', 'BtnConfigure', 'BtnLogs', 'BtnOpen',
-    'TxtGroupName', 'TxtGroupInfo', 'BtnApply', 'BtnGroupStart', 'BtnGroupStop', 'BtnGroupUpdate', 'BtnRemoveOrphans', 'BtnRefresh',
-    'Grid', 'TxtEmpty', 'RowMenu', 'MnuStart', 'MnuStop', 'MnuRestart', 'MnuUpdate', 'MnuRecreate', 'MnuConfigure', 'MnuLogs', 'MnuOpen', 'MnuCopy', 'MnuRemove',
+    'LstGroups', 'TxtSearch', 'SearchHint', 'CmbState', 'BtnView', 'BtnStart', 'BtnStop', 'BtnRestart', 'BtnUpdate', 'BtnConfigure', 'BtnLogs', 'BtnOpen',
+    'TxtGroupName', 'TxtGroupInfo', 'BtnApply', 'BtnGroupStart', 'BtnGroupStop', 'BtnGroupUpdate', 'BtnRemoveOrphans', 'BtnCheckUpdates', 'BtnRefresh',
+    'Grid', 'Cards', 'TxtEmpty', 'RowMenu', 'MnuStart', 'MnuStop', 'MnuRestart', 'MnuUpdate', 'MnuRecreate', 'MnuConfigure', 'MnuLogs', 'MnuOpen', 'MnuCopy', 'MnuRemove',
     'LogRow', 'LogSplitter', 'LogPane', 'BtnLogCopy', 'BtnLogClear', 'TxtLog', 'TxtStatus', 'PrgBusy', 'TxtBusy', 'BtnCancel', 'ChkActivity') {
     $ui[$name] = $window.FindName($name)
 }
@@ -974,6 +1450,8 @@ if (-not $ui.MnuStart) {
     # Names inside a ContextMenu can sit outside the window's name scope.
     foreach ($item in $ui.Grid.ContextMenu.Items) { if ($item.Name) { $ui[$item.Name] = $item } }
 }
+if (-not $ui.RowMenu) { $ui.RowMenu = $ui.Grid.ContextMenu }
+Set-MenuTheme $ui.RowMenu $window
 $window.Title = "$script:AppName v$script:AppVersion"
 
 # ---------------------------------------------------------------------------
@@ -999,7 +1477,8 @@ function Write-Trace([string]$Text) { if ($script:Trace) { Write-Activity "trace
 # Kind: info | warn | error. Action: $null or @{ Text; Glyph; Click = scriptblock }
 function Show-Banner {
     param([string]$Kind, [string]$Text, [hashtable]$Action, [switch]$EnvPicker)
-    $colours = @{ info = @('#E3EFFC', '#9CC3F0', [char]0xE946); warn = @('#FFF4D6', '#E8C66A', [char]0xE7BA); error = @('#FDE3E6', '#EBA2AA', [char]0xEA39) }
+    $p = $script:Pal
+    $colours = @{ info = @($p.InfoBg, $p.InfoEdge, [char]0xE946); warn = @($p.WarnBg, $p.WarnEdge, [char]0xE7BA); error = @($p.ErrorBg, $p.ErrorEdge, [char]0xEA39) }
     $c = $colours[$Kind]
     $ui.Banner.Background = [Windows.Media.BrushConverter]::new().ConvertFromString($c[0])
     $ui.Banner.BorderBrush = [Windows.Media.BrushConverter]::new().ConvertFromString($c[1])
@@ -1841,6 +2320,9 @@ function Import-ComposeConfig($Config, [hashtable]$Hashes) {
             $row.Ports = $ports.Text
             $row.Url = $ports.Url
             $row.Description = if ($labels.ContainsKey("$prefix.description")) { $labels["$prefix.description"] } else { '' }
+            $colour = if ($labels.ContainsKey("$prefix.color")) { $labels["$prefix.color"].Trim() } else { '' }
+            $row.ColorLabel = if ($colour -and (Test-Colour $colour)) { $colour } else { '' }
+            $row.IconLabel = if ($labels.ContainsKey("$prefix.icon")) { $labels["$prefix.icon"].Trim() } else { '' }
             $row.ConfigHash = if ($Hashes.ContainsKey($name)) { $Hashes[$name] } else { '' }
             Update-RowNote $row
         }
@@ -1868,8 +2350,14 @@ function Import-ComposeConfig($Config, [hashtable]$Hashes) {
     Update-Banner
     Update-Groups
     Update-View -Refilter
+    Update-Icons
+    Start-LocalDigestScan
     $script:LastStatusSig = ''
     $script:NextPoll = [DateTime]::MinValue   # status straight away
+}
+
+function Test-Colour([string]$Text) {
+    try { [void][Windows.Media.ColorConverter]::ConvertFromString($Text); return $true } catch { return $false }
 }
 
 # ---------------------------------------------------------------------------
@@ -1935,6 +2423,7 @@ function Update-RowNote([Dcm.Row]$Row) {
     $Row.Changed = ($Row.InCompose -and $Row.HasContainer -and $Row.ConfigHash -and $Row.RunningHash -and $Row.ConfigHash -ne $Row.RunningHash)
     if (-not $Row.InCompose) { $Row.Note = 'Removed from compose file' }
     elseif ($Row.Changed) { $Row.Note = 'Changed: recreate to apply' }
+    elseif ($Row.UpdateAvailable) { $Row.Note = 'Update available' }
     else { $Row.Note = '' }
 }
 
@@ -2014,6 +2503,7 @@ function Import-Status([string]$Output) {
         Update-RowNote $row
     }
     Update-Groups
+    if ($membership) { Update-Icons }
     if ($membership -or ($stateChanged -and $script:StateFilter -ne 'All')) { Update-View -Refilter } else { Update-View }
     $running = @($script:Rows | Where-Object IsRunning).Count
     Set-Status ('{0} of {1} running  ·  updated {2}' -f $running, $script:Rows.Count, (Get-Date).ToString('HH:mm:ss'))
@@ -2065,6 +2555,22 @@ function Update-Groups {
             $script:UpdatingGroups = $false
         }
     }
+    # Colours: a home.color label wins, then the palette in name order.
+    $labelColours = @{}
+    foreach ($r in $script:Rows) {
+        if ($r.InCompose -and $r.ColorLabel -and -not $labelColours.ContainsKey($r.Group)) { $labelColours[$r.Group] = $r.ColorLabel }
+    }
+    $colourOf = @{}
+    for ($i = 0; $i -lt $names.Count; $i++) {
+        $colourOf[$names[$i]] = if ($labelColours.ContainsKey($names[$i])) { $labelColours[$names[$i]] } else { $script:GroupPalette[$i % $script:GroupPalette.Count] }
+    }
+    $grey = $script:Pal.Off
+    foreach ($g in $script:Groups) {
+        $g.Color = if ($g.Key -eq '*') { $script:Pal.Accent } elseif ($g.Key.StartsWith('g:') -and $colourOf.ContainsKey($g.Name)) { $colourOf[$g.Name] } else { $grey }
+    }
+    foreach ($r in $script:Rows) {
+        $r.GroupColor = if ($r.InCompose -and $colourOf.ContainsKey($r.Group)) { $colourOf[$r.Group] } else { $grey }
+    }
     # Counts in one pass (this runs after every status check).
     $tally = @{}
     foreach ($g in $script:Groups) { $tally[$g.Key] = @{ Running = 0; Total = 0; Problem = $false } }
@@ -2094,6 +2600,7 @@ function Update-GroupBar {
     $running = @($rows | Where-Object IsRunning).Count
     $problems = @($rows | Where-Object Problem).Count
     $changed = @($rows | Where-Object Changed).Count
+    $updates = @($rows | Where-Object UpdateAvailable).Count
     $ui.TxtGroupName.Text = $name
     if (-not $script:ComposePath) { $ui.TxtGroupInfo.Text = 'No compose file chosen yet.' }
     elseif ($key -eq '~orphans') { $ui.TxtGroupInfo.Text = "$($rows.Count) container(s) left over from services that were taken out of the compose file." }
@@ -2101,6 +2608,7 @@ function Update-GroupBar {
         $info = '{0} running, {1} stopped' -f $running, ($rows.Count - $running)
         if ($problems) { $info += ", $problems need a look" }
         if ($changed) { $info += ", $changed changed in the compose file" }
+        if ($updates) { $info += ", $updates with a newer image" }
         $ui.TxtGroupInfo.Text = $info
     }
     $isOrphans = ($key -eq '~orphans')
@@ -2132,6 +2640,7 @@ $script:View.Filter = [Predicate[object]] {
         'Stopped'  { if ($r.IsRunning) { return $false } }
         'Problems' { if (-not $r.Problem) { return $false } }
         'Changed'  { if (-not $r.Changed) { return $false } }
+        'Updates available' { if (-not $r.UpdateAvailable) { return $false } }
     }
     $q = $script:SearchText
     if ($q) {
@@ -2150,10 +2659,11 @@ function Update-View([switch]$Refilter) {
         $Refilter = $true
     }
     if ($Refilter) {
-        $keep = @($ui.Grid.SelectedItems)
+        $list = Get-ListControl
+        $keep = @($list.SelectedItems)
         Write-Trace "view refresh (group $script:SelectedGroupKey, keeping $($keep.Count) selected)"
         $script:View.Refresh()
-        foreach ($r in $keep) { if ($script:Rows.Contains($r) -and $script:View.Contains($r)) { [void]$ui.Grid.SelectedItems.Add($r) } }
+        foreach ($r in $keep) { if ($script:Rows.Contains($r) -and $script:View.Contains($r)) { [void]$list.SelectedItems.Add($r) } }
     }
     $shown = @($script:View).Count
     if (-not $script:ComposePath) {
@@ -2171,7 +2681,29 @@ function Update-View([switch]$Refilter) {
     Update-SelectionButtons
 }
 
-function Get-SelectedRows { return @($ui.Grid.SelectedItems | Where-Object { $_ -is [Dcm.Row] }) }
+# The list or the cards, whichever is showing.
+function Get-ListControl { if ($script:Settings.ViewMode -eq 'Cards') { return $ui.Cards } return $ui.Grid }
+
+function Get-SelectedRows { return @((Get-ListControl).SelectedItems | Where-Object { $_ -is [Dcm.Row] }) }
+
+function Set-ViewMode([string]$Mode) {
+    $cards = ($Mode -eq 'Cards')
+    $to = if ($cards) { $ui.Cards } else { $ui.Grid }
+    $other = if ($cards) { $ui.Grid } else { $ui.Cards }
+    $keep = @($other.SelectedItems) + @($to.SelectedItems)
+    $script:Settings.ViewMode = if ($cards) { 'Cards' } else { 'List' }
+    $ui.BtnView.Content = if ($cards) { 'List' } else { 'Cards' }
+    $ui.BtnView.Tag = [string][char]$(if ($cards) { 0xE8FD } else { 0xF0E2 })
+    # Only the one on show is bound to the list, so the hidden one costs nothing.
+    $other.ContextMenu = $null
+    $other.ItemsSource = $null
+    $other.Visibility = 'Collapsed'
+    if (-not [object]::ReferenceEquals($to.ItemsSource, $script:View)) { $to.ItemsSource = $script:View }
+    $to.ContextMenu = $ui.RowMenu
+    $to.Visibility = 'Visible'
+    foreach ($r in $keep) { if ($script:View.Contains($r) -and -not $to.SelectedItems.Contains($r)) { [void]$to.SelectedItems.Add($r) } }
+    Update-SelectionButtons
+}
 
 function Update-SelectionButtons {
     $sel = Get-SelectedRows
@@ -2259,6 +2791,10 @@ function Complete-Job($Job) {
     $script:CurrentJob = $null
     Update-BusyState
     $script:NextPoll = [DateTime]::MinValue
+    if (-not $script:JobQueue.Count) {
+        Start-LocalDigestScan
+        if ($script:DiskForm) { Update-DiskWindow }
+    }
     if (-not $window.IsVisible -and $script:Tray) {
         $icon = if ($Job.Failed) { [Windows.Forms.ToolTipIcon]::Error } else { [Windows.Forms.ToolTipIcon]::Info }
         $text = if ($Job.Failed) { "Failed: $($Job.Label)" } else { "Done: $($Job.Label)" }
@@ -2410,6 +2946,411 @@ function Open-Url([string]$Url) {
 }
 
 # ---------------------------------------------------------------------------
+# Background work (web requests) in a small pool of runspaces, so the window
+# never waits on the network. The heartbeat collects the results.
+# ---------------------------------------------------------------------------
+$script:BgPool  = $null
+$script:BgTasks = New-Object System.Collections.ArrayList
+
+function Start-Background([scriptblock]$Work, [object[]]$Arguments, [scriptblock]$OnDone) {
+    try {
+        if (-not $script:BgPool) {
+            $script:BgPool = [RunspaceFactory]::CreateRunspacePool(1, 4)
+            $script:BgPool.Open()
+        }
+        $ps = [PowerShell]::Create()
+        $ps.RunspacePool = $script:BgPool
+        [void]$ps.AddScript($Work.ToString())
+        foreach ($a in $Arguments) { [void]$ps.AddArgument($a) }
+        $handle = $ps.BeginInvoke()
+        [void]$script:BgTasks.Add(@{ PS = $ps; Handle = $handle; OnDone = $OnDone; Started = [DateTime]::Now })
+        return $true
+    } catch {
+        Write-Activity "Couldn't start background work: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Update-Background {
+    if ($script:BgTasks.Count -eq 0) { return }
+    foreach ($t in @($script:BgTasks)) {
+        $timedOut = (([DateTime]::Now - $t.Started).TotalMinutes -gt 5)
+        if (-not $t.Handle.IsCompleted -and -not $timedOut) { continue }
+        $script:BgTasks.Remove($t)
+        $out = @()
+        $err = ''
+        if (-not $t.Handle.IsCompleted) {
+            $err = 'Timed out.'
+            try { [void]$t.PS.BeginStop($null, $null) } catch { Write-Verbose 'Background task already ending.' }
+        } else {
+            try { $out = @($t.PS.EndInvoke($t.Handle)) } catch { $err = $_.Exception.Message }
+            if (-not $err -and $t.PS.Streams.Error.Count) { $err = [string]$t.PS.Streams.Error[0] }
+            $t.PS.Dispose()
+        }
+        try { & $t.OnDone $out $err } catch { Write-Activity "Internal error: $($_.Exception.Message)" }
+    }
+}
+
+function Stop-Background {
+    foreach ($t in @($script:BgTasks)) { try { [void]$t.PS.BeginStop($null, $null) } catch { Write-Verbose 'Background task already ending.' } }
+    $script:BgTasks.Clear()
+    if ($script:BgPool) { try { [void]$script:BgPool.BeginClose($null, $null) } catch { Write-Verbose 'Runspace pool already closed.' } }
+}
+
+# ---------------------------------------------------------------------------
+# App icons. Found from the image name (lscr.io/linuxserver/sonarr -> sonarr) or
+# a home.icon label (a name, a web address or a picture file), downloaded once
+# from the dashboard-icons project and kept in %LOCALAPPDATA%. Containers
+# without one get a letter in their group colour.
+# ---------------------------------------------------------------------------
+$script:IconDir       = Join-Path (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) $script:AppName) 'Icons'
+$script:IconBase      = 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/'
+$script:IconImages    = @{}   # file -> decoded picture
+$script:IconRequested = @{}   # name -> $true once asked for in this session
+
+$script:IconWork = {
+    param($Jobs, $Dir)
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    foreach ($j in $Jobs) {
+        $wc = New-Object Net.WebClient
+        $wc.Headers['User-Agent'] = 'Docker-Container-Manager'
+        try {
+            $bytes = $wc.DownloadData($j.Url)
+            $hex = if ($bytes.Length -ge 4) { [BitConverter]::ToString($bytes, 0, 4) } else { '' }
+            # PNG, JPEG, GIF, ICO or BMP; anything else (an error page, WebP) counts as no icon.
+            if ($hex -match '^(89-50-4E-47|FF-D8-FF|47-49-46-38|00-00-01-00|42-4D)') {
+                [IO.File]::WriteAllBytes((Join-Path $Dir ($j.Key + '.png')), $bytes); 'ok'
+            } else {
+                [IO.File]::WriteAllText((Join-Path $Dir ($j.Key + '.none')), ''); 'none'
+            }
+        } catch {
+            $ex = $_.Exception
+            while ($ex -and -not ($ex -is [Net.WebException])) { $ex = $ex.InnerException }
+            if ($ex -and $ex.Response -and [int]$ex.Response.StatusCode -eq 404) {
+                [IO.File]::WriteAllText((Join-Path $Dir ($j.Key + '.none')), ''); 'none'
+            } else { 'error' }
+        } finally { $wc.Dispose() }
+    }
+}
+
+function Get-IconSlugs([Dcm.Row]$Row) {
+    $cands = New-Object System.Collections.Generic.List[string]
+    $label = [string]$Row.IconLabel
+    if ($label -and $label -notmatch '[\\/:.]') { $cands.Add($label) }
+    $img = [string]$Row.Image
+    if ($img -and -not $img.StartsWith('(')) {
+        $name = ($img -split '@')[0]
+        $slash = $name.LastIndexOf('/')
+        $colon = $name.LastIndexOf(':')
+        if ($colon -gt $slash) { $name = $name.Substring(0, $colon) }
+        $name = $name.Substring($slash + 1)
+        $cands.Add($name)
+        $cands.Add(($name -replace '[-_]?\d+$', ''))
+        $cands.Add(($name -replace '[-_](server|web|app|docker|ce|oss)$', ''))
+    }
+    $cands.Add($Row.Service)
+    $cands.Add(($Row.Service -replace '[-_]?\d+$', ''))
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($c in $cands) {
+        $s = (([string]$c).ToLowerInvariant() -replace '[^a-z0-9-]+', '-').Trim('-')
+        if ($s -and -not $out.Contains($s)) { $out.Add($s) }
+    }
+    return $out.ToArray()
+}
+
+function Get-UrlIconKey([string]$Url) {
+    $sha = [Security.Cryptography.SHA1]::Create()
+    try { $hash = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Url)) } finally { $sha.Dispose() }
+    return 'url-' + ([BitConverter]::ToString($hash, 0, 8) -replace '-', '').ToLowerInvariant()
+}
+
+function Get-IconImage([string]$Path) {
+    if ($script:IconImages.ContainsKey($Path)) { return $script:IconImages[$Path] }
+    $bmp = $null
+    try {
+        $bmp = New-Object Windows.Media.Imaging.BitmapImage
+        $bmp.BeginInit()
+        $bmp.CacheOption = [Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+        $bmp.DecodePixelWidth = 72
+        $bmp.UriSource = New-Object Uri($Path)
+        $bmp.EndInit()
+        $bmp.Freeze()
+    } catch {
+        Write-Verbose "Icon unreadable: $Path"
+        $bmp = $null
+    }
+    $script:IconImages[$Path] = $bmp
+    return $bmp
+}
+
+function Update-Icons {
+    $show = [bool]$script:Settings.DownloadIcons
+    if ($show -and -not (Test-Path -LiteralPath $script:IconDir)) {
+        try { New-Item -ItemType Directory -Path $script:IconDir -Force | Out-Null } catch { $show = $false }
+    }
+    $fetch = [ordered]@{}
+    foreach ($row in @($script:Rows)) {
+        $found = ''
+        $label = [string]$row.IconLabel
+        if ($show -and $label -and $label -notmatch '^(?i)https?://' -and $label -match '[\\/]|\.(?i:png|jpe?g|ico|bmp|gif)$') {
+            $p = if ([IO.Path]::IsPathRooted($label)) { $label } elseif ($script:ComposeDir) { Join-Path $script:ComposeDir $label } else { '' }
+            if ($p -and (Test-Path -LiteralPath $p -PathType Leaf)) { $found = $p }
+        } elseif ($show) {
+            $keys = @()
+            if ($label -match '^(?i)https?://') { $keys += Get-UrlIconKey $label }
+            $keys += @(Get-IconSlugs $row)
+            foreach ($k in $keys) {
+                $png = Join-Path $script:IconDir "$k.png"
+                if (Test-Path -LiteralPath $png) { $found = $png; break }
+                $miss = Get-Item -LiteralPath (Join-Path $script:IconDir "$k.none") -ErrorAction SilentlyContinue
+                if ($miss -and ([DateTime]::Now - $miss.LastWriteTime).TotalDays -lt 14) { continue }
+                # Not known yet: ask for it, and wait for the answer before trying the next name.
+                if (-not $script:IconRequested.ContainsKey($k)) { $fetch[$k] = if ($k.StartsWith('url-')) { $label } else { $script:IconBase + "$k.png" } }
+                break
+            }
+        }
+        if ($row.IconKey -ne $found -or ($found -and -not $row.HasIcon)) {
+            $row.IconKey = $found
+            $row.Icon = if ($found) { Get-IconImage $found } else { $null }
+        }
+    }
+    if (-not $fetch.Count) { return }
+    $jobs = @(foreach ($k in $fetch.Keys) { $script:IconRequested[$k] = $true; @{ Key = $k; Url = $fetch[$k] } })
+    $parts = 4
+    for ($p = 0; $p -lt $parts; $p++) {
+        $chunk = @(for ($i = $p; $i -lt $jobs.Count; $i += $parts) { $jobs[$i] })
+        if (-not $chunk.Count) { continue }
+        [void](Start-Background -Work $script:IconWork -Arguments @($chunk, $script:IconDir) -OnDone {
+                param($out, $err)
+                $fails = @($out | Where-Object { $_ -eq 'error' }).Count
+                if (($fails -or $err) -and -not $script:IconErrorShown) {
+                    $script:IconErrorShown = $true
+                    Write-Activity "Some app icons couldn't be downloaded (no internet?). Letters are shown instead; they're tried again next time."
+                }
+                if (@($out | Where-Object { $_ -eq 'ok' -or $_ -eq 'none' }).Count) { Update-Icons }
+            })
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Update checker. Asks each image's registry for the digest of its tag (a HEAD
+# request, so nothing is downloaded and Docker Hub's pull limit isn't touched)
+# and compares it with the digest of the image on this PC.
+# ---------------------------------------------------------------------------
+$script:UpdatesPath        = Join-Path $script:SettingsDir 'updates.json'
+$script:LocalDigests       = @{}   # image key -> digests of the image on this PC
+$script:RemoteDigests      = @{}   # image key -> @{ Digest; Checked }
+$script:LocalScanRunning   = $false
+$script:UpdateCheckRunning = $false
+$script:UpdateAutoDone     = $false
+
+# Splits an image reference into registry, repository and tag. $null for
+# references that can't be checked (built from source, pinned to a digest).
+function Get-ImageParts([string]$Ref) {
+    $r = ([string]$Ref).Trim()
+    if (-not $r -or $r.Contains('@') -or $r.StartsWith('(') -or $r -match '\s') { return $null }
+    $slash = $r.LastIndexOf('/')
+    $colon = $r.LastIndexOf(':')
+    $tag = 'latest'
+    if ($colon -gt $slash) { $tag = $r.Substring($colon + 1); $r = $r.Substring(0, $colon) }
+    $parts = $r.Split('/')
+    $registry = 'docker.io'
+    if ($parts.Count -gt 1 -and ($parts[0] -match '[.:]' -or $parts[0] -eq 'localhost')) {
+        $registry = $parts[0].ToLowerInvariant()
+        $r = $parts[1..($parts.Count - 1)] -join '/'
+    }
+    if ($registry -eq 'index.docker.io' -or $registry -eq 'registry-1.docker.io') { $registry = 'docker.io' }
+    if ($registry -eq 'docker.io' -and -not $r.Contains('/')) { $r = "library/$r" }
+    if (-not $r -or -not $tag) { return $null }
+    $api = if ($registry -eq 'docker.io') { 'registry-1.docker.io' } else { $registry }
+    return @{ Registry = $registry; Api = $api; Repo = $r; Tag = $tag; Key = "$registry/$($r):$tag" }
+}
+
+function Get-ImageKey([string]$Ref) {
+    $p = Get-ImageParts $Ref
+    if ($p) { return $p.Key }
+    return ''
+}
+
+$script:UpdateCheckWork = {
+    param($Items)
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $accept = 'application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, ' +
+        'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'
+    $tokens = @{}
+    function Send-Head([string]$Url, [string]$Token) {
+        for ($hop = 0; $hop -lt 4; $hop++) {
+            $req = [Net.HttpWebRequest]::Create($Url)
+            $req.Method = 'HEAD'
+            $req.Accept = $accept
+            $req.Timeout = 15000
+            $req.AllowAutoRedirect = $false
+            $req.UserAgent = 'Docker-Container-Manager'
+            if ($Token) { $req.Headers['Authorization'] = "Bearer $Token" }
+            $resp = $null
+            try { $resp = $req.GetResponse() }
+            catch {
+                $ex = $_.Exception
+                while ($ex -and -not ($ex -is [Net.WebException])) { $ex = $ex.InnerException }
+                if (-not $ex -or -not $ex.Response) { throw }
+                $resp = $ex.Response
+            }
+            try {
+                $code = [int]$resp.StatusCode
+                $location = $resp.Headers['Location']
+                if ($code -ge 300 -and $code -lt 400 -and $location) { $Url = [string](New-Object Uri((New-Object Uri($Url)), $location)); continue }
+                return @{ Code = $code; Digest = $resp.Headers['Docker-Content-Digest']; Auth = $resp.Headers['WWW-Authenticate'] }
+            } finally { $resp.Close() }
+        }
+        return @{ Code = 0 }
+    }
+    function Get-Token([string]$Auth) {
+        $p = @{}
+        foreach ($m in [regex]::Matches($Auth, '(\w+)="([^"]*)"')) { $p[$m.Groups[1].Value] = $m.Groups[2].Value }
+        if (-not $p['realm']) { return $null }
+        $q = @()
+        foreach ($k in 'service', 'scope') { if ($p[$k]) { $q += "$k=" + [Uri]::EscapeDataString($p[$k]) } }
+        $url = $p['realm'] + $(if ($q.Count) { '?' + ($q -join '&') } else { '' })
+        if ($tokens.ContainsKey($url)) { return $tokens[$url] }
+        $wc = New-Object Net.WebClient
+        $wc.Headers['User-Agent'] = 'Docker-Container-Manager'
+        try { $j = $wc.DownloadString($url) | ConvertFrom-Json } finally { $wc.Dispose() }
+        $t = if ($j.token) { $j.token } else { $j.access_token }
+        $tokens[$url] = $t
+        return $t
+    }
+    foreach ($it in $Items) {
+        $r = @{ Key = $it.Key; Digest = ''; Error = '' }
+        try {
+            $h = Send-Head $it.Url $null
+            if ($h.Code -eq 401 -and $h.Auth -match '^Bearer') { $h = Send-Head $it.Url (Get-Token $h.Auth) }
+            if ($h.Code -eq 200 -and $h.Digest) { $r.Digest = [string]$h.Digest } else { $r.Error = "HTTP $($h.Code)" }
+        } catch { $r.Error = $_.Exception.Message }
+        [pscustomobject]$r
+    }
+}
+
+function Read-UpdateCache {
+    if (-not (Test-Path -LiteralPath $script:UpdatesPath)) { return }
+    try {
+        $j = [IO.File]::ReadAllText($script:UpdatesPath) | ConvertFrom-Json
+        foreach ($p in $j.Images.PSObject.Properties) {
+            $when = [DateTime]::Parse([string]$p.Value.Checked, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
+            $script:RemoteDigests[$p.Name] = @{ Digest = [string]$p.Value.Digest; Checked = $when.ToLocalTime() }
+        }
+    } catch { Write-Verbose "Update cache unreadable: $($_.Exception.Message)" }
+}
+
+function Save-UpdateCache {
+    try {
+        $images = [ordered]@{}
+        foreach ($k in ($script:RemoteDigests.Keys | Sort-Object)) {
+            $v = $script:RemoteDigests[$k]
+            $images[$k] = [ordered]@{ Digest = $v.Digest; Checked = $v.Checked.ToUniversalTime().ToString('o') }
+        }
+        if (-not (Test-Path -LiteralPath $script:SettingsDir)) { New-Item -ItemType Directory -Path $script:SettingsDir -Force | Out-Null }
+        $json = [pscustomobject]@{ Images = [pscustomobject]$images } | ConvertTo-Json -Depth 4
+        [IO.File]::WriteAllText($script:UpdatesPath, $json, (New-Object Text.UTF8Encoding($false)))
+    } catch { Write-Activity "Couldn't save the update check results: $($_.Exception.Message)" }
+}
+
+# Reads the digests of the images on this PC, then marks containers with a newer image.
+function Start-LocalDigestScan {
+    if (-not $script:DockerExe -or $script:LocalScanRunning -or -not $script:ConfigLoaded) { return }
+    $refs = @($script:Rows | Where-Object { $_.InCompose -and (Get-ImageKey $_.Image) } | ForEach-Object Image | Sort-Object -Unique)
+    if (-not $refs.Count) { return }
+    $script:LocalScanRunning = $true
+    Start-DockerCall -Arguments (@('image', 'inspect', '--format', '{{json .RepoTags}}|{{json .RepoDigests}}') + $refs) -OnDone {
+        param($res)
+        $script:LocalScanRunning = $false
+        $map = @{}
+        foreach ($line in ($res.Output -split "`r?`n")) {
+            $p = $line.Split('|')
+            if ($p.Count -ne 2) { continue }
+            try { $tags = @($p[0] | ConvertFrom-Json); $digests = @($p[1] | ConvertFrom-Json) } catch { continue }
+            $d = @($digests | Where-Object { $_ } | ForEach-Object { ([string]$_ -split '@')[-1] })
+            foreach ($t in $tags) { $k = Get-ImageKey ([string]$t); if ($k) { $map[$k] = $d } }
+        }
+        $script:LocalDigests = $map
+        Update-UpdateFlags
+        if ($script:Settings.CheckUpdatesOnStart -and -not $script:UpdateAutoDone -and $map.Count) {
+            $script:UpdateAutoDone = $true
+            $stale = @($map.Keys | Where-Object { -not $script:RemoteDigests.ContainsKey($_) -or ([DateTime]::Now - $script:RemoteDigests[$_].Checked).TotalHours -ge 12 })
+            if ($stale.Count) { Start-UpdateCheck -Keys $stale -Quiet }
+        }
+    }
+}
+
+function Start-UpdateCheck([string[]]$Keys, [switch]$Quiet) {
+    if ($script:UpdateCheckRunning) { return }
+    if (-not $Keys) { $Keys = @($script:LocalDigests.Keys) }
+    $items = @(foreach ($k in $Keys) {
+            $p = Get-ImageParts $k
+            if ($p) { @{ Key = $k; Url = "https://$($p.Api)/v2/$($p.Repo)/manifests/$($p.Tag)" } }
+        })
+    if (-not $items.Count) {
+        if (-not $Quiet) { Set-Status 'No downloaded images to check yet. Start or update a container first.' }
+        return
+    }
+    $script:UpdateCheckRunning = $true
+    $script:UpdatePartsLeft = 0
+    $script:UpdateErrors = 0
+    $script:UpdateErrorSample = ''
+    $ui.BtnCheckUpdates.IsEnabled = $false
+    $ui.BtnCheckUpdates.Content = 'Checking...'
+    Write-Activity "Checking $($items.Count) image(s) for updates..."
+    $parts = 4
+    for ($p = 0; $p -lt $parts; $p++) {
+        $chunk = @(for ($i = $p; $i -lt $items.Count; $i += $parts) { $items[$i] })
+        if (-not $chunk.Count) { continue }
+        $script:UpdatePartsLeft++
+        $started = Start-Background -Work $script:UpdateCheckWork -Arguments @(, $chunk) -OnDone {
+            param($out, $err)
+            if ($err -and -not $out.Count) { $script:UpdateErrors++; $script:UpdateErrorSample = $err }
+            foreach ($r in $out) {
+                if ($r.Digest) { $script:RemoteDigests[$r.Key] = @{ Digest = $r.Digest; Checked = [DateTime]::Now } }
+                else { $script:UpdateErrors++; if (-not $script:UpdateErrorSample) { $script:UpdateErrorSample = "$($r.Key): $($r.Error)" } }
+            }
+            $script:UpdatePartsLeft--
+            if ($script:UpdatePartsLeft -le 0) { Complete-UpdateCheck }
+        }
+        if (-not $started) { $script:UpdatePartsLeft-- }
+    }
+    if ($script:UpdatePartsLeft -le 0) { Complete-UpdateCheck }
+}
+
+function Complete-UpdateCheck {
+    $script:UpdateCheckRunning = $false
+    $ui.BtnCheckUpdates.IsEnabled = $true
+    $ui.BtnCheckUpdates.Content = 'Check for updates'
+    Save-UpdateCache
+    Update-UpdateFlags
+    $n = @($script:Rows | Where-Object UpdateAvailable).Count
+    $msg = if ($n) { "Update check: $n container(s) have a newer image. Update them to download it." } else { 'Update check: every image is up to date.' }
+    if ($script:UpdateErrors) { $msg += " $($script:UpdateErrors) image(s) couldn't be checked, for example $script:UpdateErrorSample." }
+    Write-Activity $msg
+    Set-Status $(if ($n) { "$n container(s) have a newer image." } else { 'Every image is up to date.' })
+}
+
+function Update-UpdateFlags {
+    $changed = $false
+    foreach ($row in @($script:Rows)) {
+        $flag = $false
+        $k = if ($row.InCompose) { Get-ImageKey $row.Image } else { '' }
+        if ($k -and $script:RemoteDigests.ContainsKey($k) -and $script:LocalDigests.ContainsKey($k)) {
+            $local = @($script:LocalDigests[$k])
+            $remote = $script:RemoteDigests[$k].Digest
+            $flag = [bool]($local.Count -and $remote -and ($local -notcontains $remote))
+        }
+        if ($row.UpdateAvailable -ne $flag) { $row.UpdateAvailable = $flag; Update-RowNote $row; $changed = $true }
+    }
+    if ($changed) {
+        Update-GroupBar
+        if ($script:StateFilter -eq 'Updates available') { Update-View -Refilter }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Check window
 # ---------------------------------------------------------------------------
 $checkXaml = @'
@@ -2434,6 +3375,8 @@ $checkXaml = @'
                 </StackPanel>
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                <Button x:Name="BtnCheckTidy" Content="Tidy spacing" Tag="&#xE8E4;" Style="{StaticResource Btn}"
+                        ToolTip="Re-indent the whole file to two spaces per level. Saved only if Docker reads the result exactly the same."/>
                 <Button x:Name="BtnCheckAgain" Content="Check again" Tag="&#xE72C;" Style="{StaticResource Btn}"/>
                 <Button x:Name="BtnCheckOpen" Content="Open at line" Tag="&#xE70F;" Style="{StaticResource Btn}"/>
                 <Button x:Name="BtnCheckCopy" Content="Copy" Tag="&#xE8C8;" Style="{StaticResource Btn}" Margin="0"/>
@@ -2452,10 +3395,10 @@ $checkXaml = @'
                             <Setter Property="BorderBrush" Value="Transparent"/>
                             <Style.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="#F3F7FC"/>
+                                    <Setter Property="Background" Value="{DynamicResource Hover}"/>
                                 </Trigger>
                                 <Trigger Property="IsSelected" Value="True">
-                                    <Setter Property="Background" Value="#BFD9F7"/>
+                                    <Setter Property="Background" Value="{DynamicResource Selected}"/>
                                     <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
                                     <Setter Property="FontWeight" Value="Bold"/>
                                 </Trigger>
@@ -2579,6 +3522,7 @@ function Show-Check {
     }
     foreach ($n in 'ChkErrors', 'ChkWarnings', 'ChkInfo') { $script:CheckForm[$n].Add_Click({ Show-CheckFindings }) }
     $w.FindName('BtnCheckAgain').Add_Click({ Update-CheckWindow })
+    $w.FindName('BtnCheckTidy').Add_Click({ Invoke-TidySpacing })
     $w.FindName('BtnCheckOpen').Add_Click({ Open-CheckFinding })
     $w.FindName('BtnCheckCopy').Add_Click({
             $items = @($script:CheckForm.Grid.SelectedItems)
@@ -2605,6 +3549,407 @@ function Show-Check {
     $w.Add_Closed({ $script:CheckForm = $null })
     $w.Show()
     Update-CheckWindow
+}
+
+# ---------------------------------------------------------------------------
+# Tidy spacing: re-indents the compose file to two spaces per level. Lists stay
+# in the style they were written in, block text (| and >) moves with its key,
+# comments move with the line below them. The result is only saved when
+# "docker compose config" reads both versions exactly the same.
+# ---------------------------------------------------------------------------
+function Format-ComposeSpacing($Lines) {
+    $out = New-Object System.Collections.Generic.List[string]
+    $so = New-Object System.Collections.Generic.List[int]   # indents as written...
+    $sn = New-Object System.Collections.Generic.List[int]   # ...and as they will be
+    $pending = New-Object System.Collections.Generic.List[int]
+    $inBlock = $false
+    $blockOrig = 0
+    $blockDelta = 0
+    foreach ($line in $Lines) {
+        if ($inBlock) {
+            if (-not $line.Trim()) { $out.Add($line); continue }
+            $ind = Get-LineIndent $line
+            if ($ind -gt $blockOrig) { $out.Add((' ' * [Math]::Max(0, $ind + $blockDelta)) + $line.TrimStart(' ')); continue }
+            $inBlock = $false
+        }
+        $t = $line.Trim()
+        if (-not $t -or $t.StartsWith('#')) { $pending.Add($out.Count); $out.Add($line.TrimEnd()); continue }
+        if ($line -match '^ *\t') { throw "Line $($out.Count + 1) is indented with a tab. Change it to spaces first." }
+        $i = Get-LineIndent $line
+        if ($t -eq '---' -or $t -eq '...') {
+            $so.Clear(); $sn.Clear()
+            $new = 0
+        } else {
+            while ($so.Count -and $so[$so.Count - 1] -gt $i) { $so.RemoveAt($so.Count - 1); $sn.RemoveAt($sn.Count - 1) }
+            if ($so.Count -and $so[$so.Count - 1] -eq $i) {
+                $new = $sn[$sn.Count - 1]
+                $so.RemoveAt($so.Count - 1); $sn.RemoveAt($sn.Count - 1)
+            } elseif ($so.Count) { $new = $sn[$sn.Count - 1] + 2 }
+            else { $new = 0 }
+            $so.Add($i); $sn.Add($new)
+            # "-   value" becomes "- value", and the value is one level in.
+            $co = $i; $cn = $new; $rest = $t; $norm = ''
+            while ($rest.StartsWith('- ') -and $rest.Substring(2).Trim()) {
+                $after = $rest.Substring(1)
+                $co = $co + 1 + ($after.Length - $after.TrimStart(' ').Length)
+                $cn += 2
+                $norm += '- '
+                $rest = $after.TrimStart(' ')
+                $so.Add($co); $sn.Add($cn)
+            }
+            $t = $norm + $rest
+        }
+        $delta = $new - $i
+        foreach ($p in $pending) {
+            $c = $out[$p]
+            if ($c.Trim() -and (Get-LineIndent $c) -gt 0) { $out[$p] = (' ' * [Math]::Max(0, (Get-LineIndent $c) + $delta)) + $c.TrimStart(' ') }
+        }
+        $pending.Clear()
+        $out.Add((' ' * $new) + $t)
+        if ((Remove-YamlComment $t) -match '(^|:\s+|^-\s+)[|>][-+0-9]*$') { $inBlock = $true; $blockOrig = $i; $blockDelta = $delta }
+    }
+    return , $out
+}
+
+function Get-TidyConfigArguments([string]$File) {
+    return @('compose', '--project-directory', $script:ComposeDir, '-p', 'dcmtidy', '-f', $File, 'config', '--format', 'json', '--no-interpolate', '--no-env-resolution')
+}
+
+function Invoke-TidySpacing {
+    $path = $script:ComposePath
+    if (-not $path -or -not (Test-Path -LiteralPath $path) -or $script:Tidy) { return }
+    $owner = if ($script:CheckForm) { $script:CheckForm.Window } else { $window }
+    try {
+        $file = Read-TextFile $path
+        $tidy = Format-ComposeSpacing $file.Lines
+    } catch {
+        [void][Windows.MessageBox]::Show($owner, "The spacing can't be tidied automatically. $($_.Exception.Message)", $script:AppName, 'OK', 'Warning')
+        return
+    }
+    $changed = New-Object System.Collections.Generic.List[int]
+    for ($i = 0; $i -lt $file.Lines.Count; $i++) { if ($file.Lines[$i] -cne $tidy[$i]) { $changed.Add($i + 1) } }
+    if (-not $changed.Count) {
+        [void][Windows.MessageBox]::Show($owner, 'The spacing is already tidy. Nothing to change.', $script:AppName, 'OK', 'Information')
+        return
+    }
+    if (-not $script:DockerExe) {
+        [void][Windows.MessageBox]::Show($owner, "docker.exe wasn't found, so the tidied file can't be checked. Nothing was changed.", $script:AppName, 'OK', 'Warning')
+        return
+    }
+    # The test copy sits next to the original so paths in the file mean the same.
+    $tmpPath = Join-Path $script:ComposeDir ('.' + [IO.Path]::GetFileNameWithoutExtension($path) + '.dcm-tidy' + [IO.Path]::GetExtension($path))
+    try {
+        Write-TextFile @{ Path = $tmpPath; Lines = $tidy; Bom = $file.Bom; NewLine = $file.NewLine; EndsWithNewline = $file.EndsWithNewline }
+    } catch {
+        [void][Windows.MessageBox]::Show($owner, "Couldn't write a test copy next to the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Warning')
+        return
+    }
+    $script:Tidy = @{ Path = $path; File = $file; Lines = $tidy; Changed = $changed; TmpPath = $tmpPath; Owner = $owner; Before = $null
+        Stamp = (Get-Item -LiteralPath $path).LastWriteTimeUtc
+    }
+    Set-Status 'Checking that Docker reads the tidied file the same way...'
+    Start-DockerCall -Arguments (Get-TidyConfigArguments $path) -OnDone {
+        param($before)
+        $script:Tidy.Before = $before
+        Start-DockerCall -Arguments (Get-TidyConfigArguments $script:Tidy.TmpPath) -OnDone { param($after) Complete-TidySpacing $after }
+    }
+}
+
+function Complete-TidySpacing($After) {
+    $t = $script:Tidy
+    $script:Tidy = $null
+    if (-not $t) { return }
+    Remove-Item -LiteralPath $t.TmpPath -Force -ErrorAction SilentlyContinue
+    $before = $t.Before
+    Set-Status ''
+    if ($before.ExitCode -ne 0) {
+        [void][Windows.MessageBox]::Show($t.Owner, "Docker can't read the compose file as it is now, so tidying can't be checked safely. Nothing was changed.`n`nFix the errors first. Docker says: $(Get-FirstLines $before.Error 3)", $script:AppName, 'OK', 'Warning')
+        return
+    }
+    if ($After.ExitCode -ne 0 -or $After.Output -cne $before.Output) {
+        Write-Activity 'Tidy spacing: the tidied file would mean something different to Docker, so it was not saved.'
+        [void][Windows.MessageBox]::Show($t.Owner, "Tidying would change what the file means to Docker, so nothing was changed. The Check window lists the lines to fix by hand.", $script:AppName, 'OK', 'Warning')
+        return
+    }
+    $list = @($t.Changed | Select-Object -First 15) -join ', '
+    if ($t.Changed.Count -gt 15) { $list += " and $($t.Changed.Count - 15) more" }
+    $q = "Tidy the spacing on $($t.Changed.Count) line(s)?`n`nLines $list`n`nDocker reads the tidied file exactly the same as now. A copy of the current file is kept in the backups folder first."
+    if ([Windows.MessageBox]::Show($t.Owner, $q, $script:AppName, 'YesNo', 'Question') -ne 'Yes') { return }
+    if ((Get-Item -LiteralPath $t.Path).LastWriteTimeUtc -ne $t.Stamp) {
+        [void][Windows.MessageBox]::Show($t.Owner, 'The compose file was saved by something else in the meantime, so nothing was changed. Press Tidy spacing again.', $script:AppName, 'OK', 'Warning')
+        return
+    }
+    try {
+        $bak = Backup-ConfigFile $t.Path
+        $t.File.Lines = $t.Lines
+        Write-TextFile $t.File
+        Write-Activity "Tidied the spacing on $($t.Changed.Count) line(s) of the compose file. Backup: $bak"
+    } catch {
+        [void][Windows.MessageBox]::Show($t.Owner, "Couldn't save the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Error')
+    }
+    if ($script:CheckForm) { Update-CheckWindow }
+}
+
+# ---------------------------------------------------------------------------
+# Disk usage window
+# ---------------------------------------------------------------------------
+$diskXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Disk usage" Width="940" Height="660" MinWidth="680" MinHeight="420" WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <DockPanel Margin="14">
+        <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="Disk usage" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock x:Name="TxtDiskInfo" Foreground="{StaticResource SoftInk}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+            </StackPanel>
+            <Button x:Name="BtnDiskRefresh" Grid.Column="1" Content="Refresh" Tag="&#xE72C;" Style="{StaticResource Btn}" Margin="0" VerticalAlignment="Center"/>
+        </Grid>
+        <UniformGrid DockPanel.Dock="Top" Rows="1" Columns="4" Margin="0,0,-8,10">
+            <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,8,0">
+                <StackPanel>
+                    <TextBlock Text="Images" Foreground="{StaticResource SoftInk}"/>
+                    <TextBlock x:Name="Size0" FontSize="20" FontWeight="SemiBold" Text="..."/>
+                    <TextBlock x:Name="Info0" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+            <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,8,0">
+                <StackPanel>
+                    <TextBlock Text="Containers" Foreground="{StaticResource SoftInk}"/>
+                    <TextBlock x:Name="Size1" FontSize="20" FontWeight="SemiBold" Text="..."/>
+                    <TextBlock x:Name="Info1" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+            <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,8,0">
+                <StackPanel>
+                    <TextBlock Text="Volumes" Foreground="{StaticResource SoftInk}"/>
+                    <TextBlock x:Name="Size2" FontSize="20" FontWeight="SemiBold" Text="..."/>
+                    <TextBlock x:Name="Info2" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+            <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,8,0">
+                <StackPanel>
+                    <TextBlock Text="Build cache" Foreground="{StaticResource SoftInk}"/>
+                    <TextBlock x:Name="Size3" FontSize="20" FontWeight="SemiBold" Text="..."/>
+                    <TextBlock x:Name="Info3" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+        <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,12,0"
+                       Text="Volumes hold container data. Removing one deletes its data for good, so the volumes button lists them and asks twice."/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button x:Name="BtnPruneDangling" Content="Remove unnamed images" Tag="&#xE74D;" Style="{StaticResource Btn}"
+                        ToolTip="Old image layers left behind when images were updated (docker image prune)"/>
+                <Button x:Name="BtnPruneUnused" Content="Remove unused images..." Tag="&#xE74D;" Style="{StaticResource Btn}"
+                        ToolTip="Every image no container uses, stopped containers included (docker image prune -a)"/>
+                <Button x:Name="BtnPruneBuild" Content="Clear build cache" Tag="&#xE74D;" Style="{StaticResource Btn}"
+                        ToolTip="Files kept from building images (docker builder prune)"/>
+                <Button x:Name="BtnPruneNetworks" Content="Remove unused networks" Tag="&#xE74D;" Style="{StaticResource Btn}"
+                        ToolTip="Networks no container is connected to (docker network prune)"/>
+                <Button x:Name="BtnPruneVolumes" Content="Remove unused volumes..." Tag="&#xE74D;" Style="{StaticResource Btn}" Margin="0"
+                        ToolTip="Volumes no container uses. Their data is deleted for good. Lists them and asks twice first."/>
+            </StackPanel>
+        </Grid>
+        <TextBlock DockPanel.Dock="Top" Text="Images, biggest first" FontWeight="SemiBold" Margin="0,0,0,6"/>
+        <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="2">
+            <Grid>
+                <DataGrid x:Name="GridImages" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column"
+                          GridLinesVisibility="None" BorderThickness="0" Background="Transparent" RowBackground="Transparent"
+                          SelectionMode="Extended" SelectionUnit="FullRow" CanUserAddRows="False" RowHeight="28">
+                    <DataGrid.RowStyle>
+                        <Style TargetType="DataGridRow">
+                            <Setter Property="BorderThickness" Value="4,0,0,0"/>
+                            <Setter Property="BorderBrush" Value="Transparent"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="{DynamicResource Hover}"/>
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background" Value="{DynamicResource Selected}"/>
+                                    <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+                                    <Setter Property="FontWeight" Value="Bold"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGrid.RowStyle>
+                    <DataGrid.CellStyle>
+                        <Style TargetType="DataGridCell">
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="DataGridCell">
+                                        <Border Padding="8,0" Background="Transparent">
+                                            <ContentPresenter VerticalAlignment="Center"/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </DataGrid.CellStyle>
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Image" Binding="{Binding Name}" Width="*"/>
+                        <DataGridTextColumn Header="Size" Binding="{Binding Size}" SortMemberPath="Bytes" Width="90"/>
+                        <DataGridTextColumn Header="Created" Binding="{Binding Created}" Width="130"/>
+                        <DataGridTextColumn Header="Used by" Binding="{Binding UsedBy}" Width="230"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+                <TextBlock x:Name="TxtDiskEmpty" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{StaticResource SoftInk}" Visibility="Collapsed"/>
+            </Grid>
+        </Border>
+    </DockPanel>
+</Window>
+'@
+
+function ConvertFrom-SizeText([string]$Text) {
+    if ($Text -match '([\d.]+)\s*([kMGT]?B)') {
+        $mult = @{ B = 1; kB = 1e3; MB = 1e6; GB = 1e9; TB = 1e12 }
+        return [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture) * $mult[$Matches[2]]
+    }
+    return 0
+}
+
+function Format-Bytes([double]$Bytes) {
+    if ($Bytes -ge 1e9) { return '{0:0.0} GB' -f ($Bytes / 1e9) }
+    if ($Bytes -ge 1e6) { return '{0:0} MB' -f ($Bytes / 1e6) }
+    if ($Bytes -ge 1e3) { return '{0:0} kB' -f ($Bytes / 1e3) }
+    return '{0:0} B' -f $Bytes
+}
+
+function Update-DiskWindow {
+    $d = $script:DiskForm
+    if (-not $d -or -not $script:DockerExe) { return }
+    $d.Info.Text = 'Asking Docker...'
+    Start-DockerCall -Arguments @('system', 'df', '--format', '{{json .}}') -OnDone {
+        param($res)
+        $d = $script:DiskForm
+        if (-not $d) { return }
+        if ($res.ExitCode -ne 0) { $d.Info.Text = "Docker didn't answer: $(Get-FirstLines $res.Error 2)"; return }
+        $total = 0.0
+        $free = 0.0
+        $slot = @{ 'Images' = 0; 'Containers' = 1; 'Local Volumes' = 2; 'Build Cache' = 3 }
+        foreach ($line in ($res.Output -split "`r?`n")) {
+            if (-not $line.Trim()) { continue }
+            try { $o = $line | ConvertFrom-Json } catch { continue }
+            $n = $slot[[string]$o.Type]
+            if ($null -eq $n) { continue }
+            $total += ConvertFrom-SizeText $o.Size
+            $free += ConvertFrom-SizeText $o.Reclaimable
+            $d["Size$n"].Text = [string]$o.Size
+            $d["Info$n"].Text = '{0} in all, {1} in use. {2} can be freed.' -f $o.TotalCount, $o.Active, $o.Reclaimable
+        }
+        $d.Info.Text = 'Docker uses {0} on this PC. About {1} of it can be freed.   Checked {2}' -f (Format-Bytes $total), (Format-Bytes $free), (Get-Date).ToString('HH:mm:ss')
+    }
+    Start-DockerCall -Arguments @('image', 'ls', '--format', '{{json .}}') -OnDone {
+        param($res)
+        $d = $script:DiskForm
+        if (-not $d) { return }
+        $users = @{}
+        foreach ($r in $script:Rows) {
+            $k = Get-ImageKey $r.Image
+            if ($k) { if ($users.ContainsKey($k)) { $users[$k] += ", $($r.Service)" } else { $users[$k] = $r.Service } }
+        }
+        $list = New-Object System.Collections.Generic.List[object]
+        foreach ($line in ($res.Output -split "`r?`n")) {
+            if (-not $line.Trim()) { continue }
+            try { $o = $line | ConvertFrom-Json } catch { continue }
+            $img = New-Object Dcm.ImageInfo
+            $img.Repository = [string]$o.Repository
+            $img.Tag = [string]$o.Tag
+            $img.Id = [string]$o.ID
+            $img.Size = [string]$o.Size
+            $img.Bytes = ConvertFrom-SizeText $o.Size
+            $img.Created = [string]$o.CreatedSince
+            $k = if ($img.Repository -ne '<none>') { Get-ImageKey ('{0}:{1}' -f $img.Repository, $(if ($img.Tag -and $img.Tag -ne '<none>') { $img.Tag } else { 'latest' })) } else { '' }
+            $img.UsedBy = if ($k -and $users.ContainsKey($k)) { $users[$k] } elseif ($img.Repository -eq '<none>') { 'Nothing (left over from an update)' } else { 'Not in this compose file' }
+            $list.Add($img)
+        }
+        $d.Grid.ItemsSource = @($list | Sort-Object Bytes -Descending)
+        $d.Empty.Text = if ($res.ExitCode -ne 0) { "Docker didn't answer: $(Get-FirstLines $res.Error 2)" } else { 'No images on this PC yet.' }
+        $d.Empty.Visibility = if ($list.Count) { 'Collapsed' } else { 'Visible' }
+    }
+}
+
+function Invoke-Prune([string]$What) {
+    $owner = $script:DiskForm.Window
+    switch ($What) {
+        'dangling' {
+            $q = "Remove the unnamed images?`n`nThese are old versions left behind after updates. No container uses them."
+            $steps = @(New-DockerStep @('image', 'prune', '-f'))
+            $label = 'Remove unnamed images'
+        }
+        'unused' {
+            $q = "Remove every image that no container uses?`n`nImages of stopped containers are kept. Services that haven't been created yet download their image again when you start them."
+            $steps = @(New-DockerStep @('image', 'prune', '-a', '-f'))
+            $label = 'Remove unused images'
+        }
+        'build' {
+            $q = "Clear the build cache?`n`nOnly files kept to speed up building images are removed. The next build may take longer."
+            $steps = @(New-DockerStep @('builder', 'prune', '-f'))
+            $label = 'Clear build cache'
+        }
+        'networks' {
+            $q = "Remove the networks no container is connected to?`n`nCompose makes them again when the containers that use them start."
+            $steps = @(New-DockerStep @('network', 'prune', '-f'))
+            $label = 'Remove unused networks'
+        }
+        default { return }
+    }
+    if ([Windows.MessageBox]::Show($owner, $q, $script:AppName, 'YesNo', 'Question') -ne 'Yes') { return }
+    Add-Job $label $steps
+}
+
+# Volumes no container uses (running or stopped). Lists them by name, asks twice,
+# then removes exactly those, so nothing else can be caught up in it.
+function Invoke-VolumePrune {
+    if (-not $script:DiskForm) { return }
+    Start-DockerCall -Arguments @('volume', 'ls', '--quiet', '--filter', 'dangling=true') -OnDone {
+        param($res)
+        $d = $script:DiskForm
+        if (-not $d) { return }
+        $owner = $d.Window
+        if ($res.ExitCode -ne 0) { [void][Windows.MessageBox]::Show($owner, "Docker didn't answer: $(Get-FirstLines $res.Error 2)", $script:AppName, 'OK', 'Warning'); return }
+        $names = @(($res.Output -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if (-not $names.Count) { [void][Windows.MessageBox]::Show($owner, 'Every volume is used by a container. Nothing to remove.', $script:AppName, 'OK', 'Information'); return }
+        $shown = @($names | Select-Object -First 25) -join "`n"
+        if ($names.Count -gt 25) { $shown += "`n... and $($names.Count - 25) more" }
+        $q1 = "These $($names.Count) volume(s) aren't used by any container, running or stopped:`n`n$shown`n`nRemove them? Their data is deleted for good."
+        if ([Windows.MessageBox]::Show($owner, $q1, $script:AppName, 'YesNo', 'Warning') -ne 'Yes') { return }
+        $q2 = "Are you sure? This can't be undone.`n`nThe data in these $($names.Count) volume(s) is lost. A container you remove and make again later starts with empty volumes."
+        if ([Windows.MessageBox]::Show($owner, $q2, $script:AppName, 'YesNo', 'Warning', 'No') -ne 'Yes') { return }
+        Add-Job "Remove $($names.Count) unused volume(s)" @(New-DockerStep (@('volume', 'rm') + $names) -AllowFail)
+    }
+}
+
+function Show-Disk {
+    if ($script:DiskForm) { $script:DiskForm.Window.Activate(); Update-DiskWindow; return }
+    $w = New-XamlObject $diskXaml
+    $w.Owner = $window
+    if ($window.Icon) { $w.Icon = $window.Icon }
+    $d = @{ Window = $w; Info = $w.FindName('TxtDiskInfo'); Grid = $w.FindName('GridImages'); Empty = $w.FindName('TxtDiskEmpty') }
+    foreach ($n in 0..3) { $d["Size$n"] = $w.FindName("Size$n"); $d["Info$n"] = $w.FindName("Info$n") }
+    $script:DiskForm = $d
+    $w.FindName('BtnDiskRefresh').Add_Click({ Update-DiskWindow })
+    $w.FindName('BtnPruneDangling').Add_Click({ Invoke-Prune 'dangling' })
+    $w.FindName('BtnPruneUnused').Add_Click({ Invoke-Prune 'unused' })
+    $w.FindName('BtnPruneBuild').Add_Click({ Invoke-Prune 'build' })
+    $w.FindName('BtnPruneNetworks').Add_Click({ Invoke-Prune 'networks' })
+    $w.FindName('BtnPruneVolumes').Add_Click({ Invoke-VolumePrune })
+    $w.Add_KeyDown({ param($src, $e) if ($e.Key -eq 'Escape') { $src.Close() } elseif ($e.Key -eq 'F5') { Update-DiskWindow; $e.Handled = $true } })
+    $w.Add_Closed({ $script:DiskForm = $null })
+    $w.Show()
+    Update-DiskWindow
 }
 
 # ---------------------------------------------------------------------------
@@ -2700,10 +4045,10 @@ $configureXaml = @'
                             <Setter Property="BorderBrush" Value="Transparent"/>
                             <Style.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="#F3F7FC"/>
+                                    <Setter Property="Background" Value="{DynamicResource Hover}"/>
                                 </Trigger>
                                 <Trigger Property="IsSelected" Value="True">
-                                    <Setter Property="Background" Value="#BFD9F7"/>
+                                    <Setter Property="Background" Value="{DynamicResource Selected}"/>
                                     <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
                                     <Setter Property="FontWeight" Value="Bold"/>
                                 </Trigger>
@@ -3057,6 +4402,7 @@ function Show-Configure([Dcm.Row]$Row) {
     }
     $folderBtn.IsEnabled = ($folders.Count -gt 0)
     if (-not $folders.Count) { $folderBtn.ToolTip = "This container doesn't use any host folders" }
+    Set-MenuTheme $menu $w
     $folderBtn.ContextMenu = $menu
     $folderBtn.Add_Click({ $this.ContextMenu.PlacementTarget = $this; $this.ContextMenu.IsOpen = $true })
 
@@ -3290,6 +4636,7 @@ $settingsXaml = @'
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <TextBlock Text="Label prefix" Margin="0,5,0,10"/>
                 <StackPanel Grid.Column="1" Margin="0,0,0,10">
@@ -3307,10 +4654,19 @@ $settingsXaml = @'
                     <TextBox x:Name="TxtEditor" Style="{StaticResource Field}" ToolTip="Visual Studio Code by default. Leave empty, or point at a missing program, to use Notepad"/>
                     <Button x:Name="BtnEditor" Grid.Column="1" Content="Browse..." Style="{StaticResource Btn}" Margin="6,0,0,0"/>
                 </Grid>
-                <CheckBox x:Name="ChkPrune" Grid.Row="3" Grid.ColumnSpan="2" Margin="0,0,0,8"
+                <TextBlock Grid.Row="3" Text="Theme" VerticalAlignment="Center" Margin="0,0,0,10"/>
+                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,10">
+                    <ComboBox x:Name="CmbTheme" Width="150" VerticalContentAlignment="Center"/>
+                    <TextBlock Text="takes effect when the app starts" VerticalAlignment="Center" Margin="8,0,0,0" Foreground="{StaticResource SoftInk}"/>
+                </StackPanel>
+                <CheckBox x:Name="ChkPrune" Grid.Row="4" Grid.ColumnSpan="2" Margin="0,0,0,8"
                           Content="After Update, remove images nothing uses any more (docker image prune)"/>
-                <CheckBox x:Name="ChkConfirm" Grid.Row="4" Grid.ColumnSpan="2" Margin="0,0,0,8" Content="Ask before stopping a group"/>
-                <CheckBox x:Name="ChkTray" Grid.Row="5" Grid.ColumnSpan="2" Content="Minimise to the notification area (tray)"/>
+                <CheckBox x:Name="ChkConfirm" Grid.Row="5" Grid.ColumnSpan="2" Margin="0,0,0,8" Content="Ask before stopping a group"/>
+                <CheckBox x:Name="ChkTray" Grid.Row="6" Grid.ColumnSpan="2" Margin="0,0,0,8" Content="Minimise to the notification area (tray)"/>
+                <CheckBox x:Name="ChkIcons" Grid.Row="7" Grid.ColumnSpan="2" Margin="0,0,0,8"
+                          Content="Show app icons (downloaded once from the dashboard-icons project and kept on this PC)"/>
+                <CheckBox x:Name="ChkUpdates" Grid.Row="8" Grid.ColumnSpan="2"
+                          Content="Check for newer images when the app starts (at most every 12 hours)"/>
             </Grid>
         </Border>
         <TextBlock x:Name="TxtWhere" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap" Margin="2,10,0,0"/>
@@ -3325,7 +4681,7 @@ $settingsXaml = @'
 function Update-PrefixHelp {
     $p = $script:SettingsForm.TxtPrefix.Text.Trim().TrimEnd('.')
     if (-not $p) { $p = 'home' }
-    $script:SettingsForm.TxtPrefixHelp.Text = "Groups come from the $p.group label. $p.url sets a container's web page ($p.url=none hides it) and $p.description its tooltip."
+    $script:SettingsForm.TxtPrefixHelp.Text = "Groups come from the $p.group label. $p.url sets a container's web page ($p.url=none hides it), $p.description its tooltip, $p.icon its icon and $p.color its group's colour."
 }
 
 function Show-Settings {
@@ -3333,7 +4689,7 @@ function Show-Settings {
     $w.Owner = $window
     if ($window.Icon) { $w.Icon = $window.Icon }
     $f = @{ Window = $w; Saved = $false }
-    foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
+    foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'CmbTheme', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'ChkIcons', 'ChkUpdates', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
     $script:SettingsForm = $f
     $f.TxtPrefix.Text = $script:Settings.LabelPrefix
     $f.TxtRefresh.Text = [string]$script:Settings.RefreshSeconds
@@ -3341,6 +4697,10 @@ function Show-Settings {
     $f.ChkPrune.IsChecked = [bool]$script:Settings.PruneAfterUpdate
     $f.ChkConfirm.IsChecked = [bool]$script:Settings.ConfirmGroupStop
     $f.ChkTray.IsChecked = [bool]$script:Settings.MinimiseToTray
+    $f.ChkIcons.IsChecked = [bool]$script:Settings.DownloadIcons
+    $f.ChkUpdates.IsChecked = [bool]$script:Settings.CheckUpdatesOnStart
+    foreach ($t in 'System', 'Light', 'Dark') { [void]$f.CmbTheme.Items.Add($t) }
+    $f.CmbTheme.SelectedItem = [string]$script:Settings.Theme
     $f.TxtWhere.Text = "Saved in $script:SettingsPath"
     Update-PrefixHelp
     $f.TxtPrefix.Add_TextChanged({ Update-PrefixHelp })
@@ -3370,7 +4730,15 @@ function Show-Settings {
             $script:Settings.PruneAfterUpdate = [bool]$f.ChkPrune.IsChecked
             $script:Settings.ConfirmGroupStop = [bool]$f.ChkConfirm.IsChecked
             $script:Settings.MinimiseToTray = [bool]$f.ChkTray.IsChecked
+            $iconsChanged = ([bool]$f.ChkIcons.IsChecked -ne [bool]$script:Settings.DownloadIcons)
+            $script:Settings.DownloadIcons = [bool]$f.ChkIcons.IsChecked
+            $script:Settings.CheckUpdatesOnStart = [bool]$f.ChkUpdates.IsChecked
+            $theme = [string]$f.CmbTheme.SelectedItem
+            $themeChanged = ($theme -and $theme -ne $script:Settings.Theme)
+            if ($theme) { $script:Settings.Theme = $theme }
             Save-Settings
+            if ($iconsChanged) { Update-Icons }
+            if ($themeChanged) { [void][Windows.MessageBox]::Show($f.Window, 'The new theme is used the next time you start the app.', 'Settings', 'OK', 'Information') }
             $script:NextPoll = [DateTime]::Now.AddSeconds($sec)
             if ($prefixChanged) { Request-ConfigLoad }
             $f.Window.Close()
@@ -3383,6 +4751,14 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.02' = @(
+        'Dark mode (follows Windows, or pick Light or Dark in Settings).',
+        'Card view: switch between the list and cards with the Cards button or Ctrl+T.',
+        'App icons for containers, and a colour for each group (home.icon and home.color labels to choose your own).',
+        'Check for updates: shows which containers have a newer image, without downloading anything.',
+        'Disk usage window with clean-up of old images and the build cache.',
+        'Tidy spacing in the Check window: re-indents the compose file, saved only if Docker reads it the same.'
+    )
     '1.01' = @(
         'Configure window for each container: change environment variables, API keys and passwords (kept in .env), move values from the compose file to .env, add new variables.',
         'Open a container''s host folders, a shell inside it, its web page and logs from the Configure window.'
@@ -3408,8 +4784,8 @@ $aboutXaml = @'
         <Border Padding="20,16">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                    <GradientStop Color="#0E2238" Offset="0"/>
-                    <GradientStop Color="#1769C2" Offset="1"/>
+                    <GradientStop Color="%%HeadA%%" Offset="0"/>
+                    <GradientStop Color="%%HeadB%%" Offset="1"/>
                 </LinearGradientBrush>
             </Border.Background>
             <StackPanel Orientation="Horizontal">
@@ -3429,7 +4805,7 @@ $aboutXaml = @'
             <TextBlock x:Name="AboutPaths" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" Margin="0,2,0,0"/>
             <TextBlock Text="Keys" FontWeight="SemiBold" Margin="0,14,0,4"/>
             <TextBlock Foreground="{StaticResource SoftInk}" TextWrapping="Wrap"
-                       Text="F5 refresh  ·  Ctrl+F search  ·  Ctrl+L logs  ·  Enter open web page  ·  Ctrl+A select all  ·  double-click a container to open its web page (or its logs if it has none)"/>
+                       Text="F5 refresh  ·  Ctrl+F search  ·  Ctrl+T list or cards  ·  Ctrl+E configure  ·  Ctrl+L logs  ·  Enter open web page  ·  Ctrl+A select all  ·  double-click a container to open its web page (or its logs if it has none)"/>
         </StackPanel>
         <Grid Margin="20,16,20,18">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -3554,22 +4930,30 @@ $ui.Grid.Add_PreviewMouseLeftButtonDown({
         if ($script:Trace) { Write-Trace ("grid mouse down on {0}" -f $e.OriginalSource.GetType().Name) }
     })
 $ui.LstGroups.ItemsSource = $script:Groups
-foreach ($s in 'All', 'Running', 'Stopped', 'Problems', 'Changed') { [void]$ui.CmbState.Items.Add($s) }
+foreach ($s in 'All', 'Running', 'Stopped', 'Problems', 'Changed', 'Updates available') { [void]$ui.CmbState.Items.Add($s) }
 $ui.CmbState.SelectedIndex = 0
 $ui.ChkActivity.IsChecked = [bool]$script:Settings.ShowActivity
 
 $logo = Get-ImageSource 'Docker-Container-Manager.png'
 if ($logo) { $ui.ImgLogo.Source = $logo; $window.Icon = $logo }
 
+# The Activity log's height, as last left by the splitter (kept within sensible bounds).
+function Get-LogHeight {
+    $h = 221
+    try { $h = [int]$script:Settings.LogHeight } catch { $h = 221 }
+    [Math]::Min(900, [Math]::Max(60, $h))
+}
+
 function Set-ActivityVisible([bool]$Show) {
     if ($Show) {
         $ui.LogPane.Visibility = 'Visible'; $ui.LogSplitter.Visibility = 'Visible'
-        if ($ui.LogRow.Height.Value -lt 60) { $ui.LogRow.Height = New-Object Windows.GridLength(170) }
+        if ($ui.LogRow.Height.Value -lt 60) { $ui.LogRow.Height = New-Object Windows.GridLength((Get-LogHeight)) }
     } else {
         $ui.LogPane.Visibility = 'Collapsed'; $ui.LogSplitter.Visibility = 'Collapsed'
         $ui.LogRow.Height = New-Object Windows.GridLength(0)
     }
 }
+$ui.LogRow.Height = New-Object Windows.GridLength((Get-LogHeight))
 Set-ActivityVisible ([bool]$script:Settings.ShowActivity)
 
 $ui.ChkActivity.Add_Click({
@@ -3604,6 +4988,7 @@ $ui.BtnEditEnv.Add_Click({
     })
 $ui.BtnFolder.Add_Click({ if ($script:ComposeDir -and (Test-Path -LiteralPath $script:ComposeDir)) { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$script:ComposeDir`"" } })
 $ui.BtnCheck.Add_Click({ Show-Check })
+$ui.BtnDisk.Add_Click({ Show-Disk })
 $ui.BtnSettings.Add_Click({ Show-Settings })
 $ui.BtnAbout.Add_Click({ Show-About })
 $ui.BannerAction.Add_Click({ if ($script:BannerClick) { & $script:BannerClick } })
@@ -3621,7 +5006,7 @@ $ui.LstGroups.Add_SelectionChanged({
         if (-not $g) { return }
         $script:SelectedGroupKey = $g.Key
         Write-Trace "group picked: $($g.Key)"
-        $ui.Grid.UnselectAll()
+        (Get-ListControl).UnselectAll()
         Update-GroupBar
         Update-View -Refilter
     })
@@ -3648,6 +5033,8 @@ $ui.BtnGroupStop.Add_Click({ Invoke-GroupAction 'stop' })
 $ui.BtnGroupUpdate.Add_Click({ Invoke-GroupAction 'update' })
 $ui.BtnRemoveOrphans.Add_Click({ Invoke-GroupAction 'remove' })
 $ui.BtnRefresh.Add_Click({ Request-ConfigLoad; $script:NextPoll = [DateTime]::MinValue })
+$ui.BtnCheckUpdates.Add_Click({ Start-UpdateCheck })
+$ui.BtnView.Add_Click({ Set-ViewMode $(if ($script:Settings.ViewMode -eq 'Cards') { 'List' } else { 'Cards' }); Save-Settings })
 $ui.BtnCancel.Add_Click({ Stop-CurrentJob })
 $ui.BtnLogClear.Add_Click({ $ui.TxtLog.Clear() })
 $ui.BtnLogCopy.Add_Click({ if ($ui.TxtLog.Text) { [Windows.Clipboard]::SetText($ui.TxtLog.Text) } })
@@ -3670,18 +5057,53 @@ $ui.Grid.Add_MouseDoubleClick({
                 $dep = if ($dep -is [Windows.Media.Visual]) { [Windows.Media.VisualTreeHelper]::GetParent($dep) } else { [Windows.LogicalTreeHelper]::GetParent($dep) }
             }
             if (-not $dep) { return }
-            $row = $dep.Item
-            if ($row -isnot [Dcm.Row]) { return }
-            # Open after the click has finished, so the grid isn't mid-click when a window opens.
-            $script:PendingOpen = $row
-            [void]$window.Dispatcher.BeginInvoke([Action] {
-                    $r = $script:PendingOpen; $script:PendingOpen = $null
-                    if (-not $r) { return }
-                    if ($r.HasUrl) { Open-Url $r.Url } elseif ($r.HasContainer) { Show-Logs $r }
-                }, [Windows.Threading.DispatcherPriority]::Background)
+            Open-RowDefault $dep.Item
         } catch {
             Write-Activity "Internal error (double-click): $($_.Exception.Message)"
         }
+    })
+
+# Double-click: the web page, or the logs if there's no web page.
+function Open-RowDefault($Row) {
+    if ($Row -isnot [Dcm.Row]) { return }
+    # Open after the click has finished, so the list isn't mid-click when a window opens.
+    $script:PendingOpen = $Row
+    [void]$window.Dispatcher.BeginInvoke([Action] {
+            $r = $script:PendingOpen; $script:PendingOpen = $null
+            if (-not $r) { return }
+            if ($r.HasUrl) { Open-Url $r.Url } elseif ($r.HasContainer) { Show-Logs $r }
+        }, [Windows.Threading.DispatcherPriority]::Background)
+}
+
+# Cards: the buttons on each card, selection and double-click.
+$ui.Cards.Add_SelectionChanged({ try { Update-SelectionButtons } catch { Write-Activity "Internal error (selection): $($_.Exception.Message)" } })
+$ui.Cards.AddHandler([Windows.Controls.Primitives.ButtonBase]::ClickEvent, [Windows.RoutedEventHandler] {
+        param($s, $e)
+        $src = $e.OriginalSource
+        if ($src -isnot [Windows.Controls.Button]) { return }
+        $e.Handled = $true
+        try {
+            $row = $src.DataContext
+            if ($row -isnot [Dcm.Row]) { return }
+            switch ([string]$src.CommandParameter) {
+                'start'     { Invoke-Start @($row) }
+                'stop'      { Invoke-Stop @($row) }
+                'logs'      { Show-Logs $row }
+                'configure' { Show-Configure $row }
+                default     { if ($src.Tag) { Open-Url ([string]$src.Tag) } }
+            }
+        } catch { Write-Activity "Internal error (card): $($_.Exception.Message)" }
+    })
+$ui.Cards.Add_MouseDoubleClick({
+        param($s, $e)
+        try {
+            $dep = $e.OriginalSource
+            while ($dep -and -not ($dep -is [Windows.Controls.ListBoxItem])) {
+                if ($dep -is [Windows.Controls.Primitives.ButtonBase] -or $dep -is [Windows.Controls.Primitives.ScrollBar]) { return }
+                $dep = if ($dep -is [Windows.Media.Visual]) { [Windows.Media.VisualTreeHelper]::GetParent($dep) } else { [Windows.LogicalTreeHelper]::GetParent($dep) }
+            }
+            if ($dep) { Open-RowDefault $dep.DataContext }
+        } catch { Write-Activity "Internal error (double-click): $($_.Exception.Message)" }
     })
 
 # Context menu: enable what makes sense for the selection.
@@ -3716,8 +5138,9 @@ $window.Add_PreviewKeyDown({
         elseif ($ctrl -and $e.Key -eq 'F') { [void]$ui.TxtSearch.Focus(); $ui.TxtSearch.SelectAll(); $e.Handled = $true }
         elseif ($ctrl -and $e.Key -eq 'E') { $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Show-Configure $sel[0] }; $e.Handled = $true }
         elseif ($ctrl -and $e.Key -eq 'L') { $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Show-Logs $sel[0] }; $e.Handled = $true }
-        elseif ($e.Key -eq 'Escape' -and $ui.TxtSearch.IsKeyboardFocusWithin) { $ui.TxtSearch.Clear(); [void]$ui.Grid.Focus(); $e.Handled = $true }
-        elseif ($e.Key -eq 'Return' -and $ui.Grid.IsKeyboardFocusWithin) { $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Open-Url $sel[0].Url }; $e.Handled = $true }
+        elseif ($ctrl -and $e.Key -eq 'T') { $ui.BtnView.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Primitives.ButtonBase]::ClickEvent))); $e.Handled = $true }
+        elseif ($e.Key -eq 'Escape' -and $ui.TxtSearch.IsKeyboardFocusWithin) { $ui.TxtSearch.Clear(); [void](Get-ListControl).Focus(); $e.Handled = $true }
+        elseif ($e.Key -eq 'Return' -and (Get-ListControl).IsKeyboardFocusWithin) { $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Open-Url $sel[0].Url }; $e.Handled = $true }
     })
 
 $window.Add_StateChanged({
@@ -3738,16 +5161,62 @@ $window.Add_Closing({
             $script:Settings.WindowHeight = [int]$window.Height
         }
         $script:Settings.WindowMaximised = ($window.WindowState -eq 'Maximized')
+        if ($ui.LogPane.Visibility -eq 'Visible' -and $ui.LogRow.ActualHeight -ge 60) { $script:Settings.LogHeight = [int]$ui.LogRow.ActualHeight }
         Save-Settings
         foreach ($lw in @($script:LogWindows)) { try { $lw.Window.Close() } catch { Write-Verbose 'Log window already closed.' } }
         foreach ($c in @($script:Calls)) { $c.Runner.Kill() }
+        Stop-Background
     })
 
 # DataGrid can squeeze its fixed columns if it is first measured before the
 # window has its final size, and it never widens them again. Set them once
 # the window is on screen.
 $script:ColumnWidths = @($ui.Grid.Columns | ForEach-Object { $_.Width })
+function Update-HeaderFit {
+    # Wide enough for the header buttons on one line. The subtitle can grow after start-up (the compose
+    # path arrives later), so this runs again whenever the title changes size. Each part is measured
+    # unconstrained, because a wrapped WrapPanel reports the wrapped (narrower) size.
+    try {
+        $inf = New-Object Windows.Size([double]::PositiveInfinity, [double]::PositiveInfinity)
+        $ui.CmbRecent.Width = 230
+        $buttons = 0.0
+        foreach ($c in $ui.HeaderButtons.Children) {
+            if ($c.Visibility -ne 'Visible') { continue }
+            $c.Measure($inf)
+            $buttons += $c.DesiredSize.Width + $c.Margin.Left + $c.Margin.Right
+        }
+        $ui.HeaderTitle.Measure($inf)
+        $ui.ImgLogo.Measure($inf)
+        $title = $ui.HeaderTitle.DesiredSize.Width + $ui.HeaderTitle.Margin.Right
+        $logo = $ui.ImgLogo.DesiredSize.Width + $ui.ImgLogo.Margin.Right
+        $content = ([Windows.FrameworkElement]$window.Content).ActualWidth
+        $chrome = if ($content -gt 0) { $window.ActualWidth - $content } else { 16 }
+        $need = [Math]::Ceiling($logo + $title + $buttons + 32 + 8 + $chrome)
+        $work = [Windows.SystemParameters]::WorkArea
+        if ($need -gt $work.Width) {
+            # Screen too narrow: give up some of the recent-files box before letting the buttons wrap.
+            $cut = [Math]::Min($need - $work.Width, 230 - 130)
+            $ui.CmbRecent.Width = 230 - $cut
+            $need -= $cut
+        }
+        $window.MinWidth = [Math]::Min($need, $work.Width)
+        if ($window.WindowState -eq 'Normal' -and $window.Width -lt $window.MinWidth) {
+            $window.Width = $window.MinWidth
+            if ($window.Left + $window.Width -gt $work.Right) { $window.Left = [Math]::Max($work.Left, $work.Right - $window.Width) }
+        }
+    } catch { Write-Verbose "Header width: $($_.Exception.Message)" }
+}
+
+$script:HeaderTitleWidth = 0.0
+$ui.HeaderTitle.Add_SizeChanged({
+        param($s, $e)
+        if ([Math]::Abs($e.NewSize.Width - $script:HeaderTitleWidth) -lt 1) { return }
+        $script:HeaderTitleWidth = $e.NewSize.Width
+        if ($window.IsLoaded) { Update-HeaderFit }
+    })
+
 $window.Add_ContentRendered({
+        Update-HeaderFit
         for ($i = 0; $i -lt $ui.Grid.Columns.Count; $i++) {
             $ui.Grid.Columns[$i].Width = New-Object Windows.Controls.DataGridLength(0)
             $ui.Grid.Columns[$i].Width = $script:ColumnWidths[$i]
@@ -3769,6 +5238,7 @@ $script:Timer.Add_Tick({
         if ($script:Closing) { return }
         try {
             Update-Calls
+            Update-Background
             Update-Jobs
             Update-LogWindows
             $now = [DateTime]::Now
@@ -3792,7 +5262,7 @@ $script:Timer.Add_Tick({
                 else { $script:NextPoll = $now.AddSeconds(5) }
             }
             # Tick fast only while something is running; idle ticks cost CPU on the UI thread.
-            $active = ($script:CurrentJob -or $script:JobQueue.Count -or $script:Calls.Count -or $script:LogWindows.Count -or $script:ConfigWanted)
+            $active = ($script:CurrentJob -or $script:JobQueue.Count -or $script:Calls.Count -or $script:LogWindows.Count -or $script:ConfigWanted -or $script:BgTasks.Count)
             $ms = if ($active) { 200 } else { 1000 }
             if ($script:Timer.Interval.TotalMilliseconds -ne $ms) { $script:Timer.Interval = [TimeSpan]::FromMilliseconds($ms) }
         } catch {
@@ -3816,6 +5286,9 @@ try { $script:Tray = New-Tray } catch { $script:Tray = $null; Write-Verbose "No 
 
 Write-Activity "$script:AppName v$script:AppVersion"
 if ($script:DockerExe) { Write-Activity "Using $script:DockerExe" } else { Write-Activity "docker.exe wasn't found. Install Docker Desktop, then press Try again." }
+
+Set-ViewMode $script:Settings.ViewMode
+Read-UpdateCache
 
 $startFile = if ($ComposeFile) { $ComposeFile } else { [string]$script:Settings.ComposeFile }
 Update-RecentList

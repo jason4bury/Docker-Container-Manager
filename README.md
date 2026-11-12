@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.01-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.02-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -26,7 +26,11 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **Tray icon** with Start and Stop for each group.
 - **Helpful banners** when Docker isn't running (with **Start Docker Desktop**), when the compose file has an error (the last good list stays), or when a folder has `Env_*` templates but no `.env` yet.
 - **Configure** a container: change its environment variables, API keys and passwords, move values written in the compose file into `.env`, add new variables, and open its host folders, a shell inside it, its web page or logs. **Save and recreate** restarts it with the new values.
-- Only changes the compose file or `.env` when you save in a Configure window, and backs both up first. Nothing is installed; settings are in `%APPDATA%`. The exe is self-contained.
+- **Check for updates**: shows which containers have a newer image on Docker Hub, GHCR, lscr.io and other registries, without downloading anything. It also checks on its own when the app starts (at most every 12 hours).
+- **Disk usage**: how much space images, containers, volumes and the build cache take, which containers use each image, and one-click clean-up of old images, the build cache, unused networks and (after listing them and asking twice) unused volumes.
+- **Tidy spacing**: re-indents the compose file to two spaces per level, and only saves it when Docker reads the result exactly the same as before.
+- **List or cards**, **dark mode**, **app icons** and a **colour for each group**.
+- Only changes the compose file or `.env` when you save in a Configure window or tidy the spacing, and backs both up first. Nothing is installed; settings are in `%APPDATA%`. The exe is self-contained.
 
 ## 🖼️ Screenshots
 
@@ -42,7 +46,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-**Exe:** download `Docker Container Manager v1.01.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
+**Exe:** download `Docker Container Manager v1.02.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
 
 **Script:** clone this repo and run `Start Docker Container Manager.cmd`. It starts `src\Docker-Container-Manager.ps1` with the execution policy bypassed for that run only.
 
@@ -71,6 +75,7 @@ To try it without your own containers, open `docs\demo\docker-compose.yml` and p
 | F5 | Read the compose file and status again |
 | Ctrl+F | Search by name, image, group or port |
 | Ctrl+E | Configure the selected container |
+| Ctrl+T | Switch between the list and cards |
 | Ctrl+L | Logs of the selected container |
 | Enter, double-click | Open the selected container's web page (double-click opens the logs if it has none) |
 | Ctrl+A | Select everything in the list |
@@ -111,12 +116,16 @@ services:
 | `home.group` | The group the service is listed under. Services without it are under **Ungrouped**. |
 | `home.url` | The container's web page. Without it the app uses `http://localhost:<first published port>`. `home.url=none` hides the link. |
 | `home.description` | Tooltip for the service in the list. |
+| `home.icon` | The service's icon: a name from [dashboard-icons](https://github.com/homarr-labs/dashboard-icons) (`home.icon=jellyfin`), a web address of a PNG, or a picture file (relative to the compose file). Without it the icon is found from the image name. |
+| `home.color` | The colour of the service's group, as `#RRGGBB` or a colour name (`home.color=#2DA44E`). One service per group is enough. |
 
 Adding or changing a label counts as a change to the service, so the app marks it **Changed** and **Apply changes** recreates it once.
 
 ### Settings
 
-**Settings** in the header sets the label prefix, how often the status is checked (15 seconds by default, 30 when the window is in the tray), the editor for **Edit** and **.env** (Visual Studio Code at `C:\Program Files\Microsoft VS Code\code.exe` by default, Notepad when it's empty or not found), whether Update removes unused images, whether stopping a group asks first and whether minimising hides the window in the tray instead of the taskbar (off by default).
+**Settings** in the header sets the label prefix, how often the status is checked (15 seconds by default, 30 when the window is in the tray), the editor for **Edit** and **.env** (Visual Studio Code at `C:\Program Files\Microsoft VS Code\code.exe` by default, Notepad when it's empty or not found), whether Update removes unused images, whether stopping a group asks first, whether minimising hides the window in the tray instead of the taskbar (off by default), the theme (System, Light or Dark), whether app icons are shown and whether to check for newer images when the app starts.
+
+Downloaded icons are kept in `%LOCALAPPDATA%\Docker Container Manager\Icons` and the last update check in `%APPDATA%\Docker Container Manager\updates.json`. Icon downloads send only the icon name (for example `sonarr.png`) to the jsDelivr CDN; turn icons off in Settings if you'd rather not.
 
 They are saved in `%APPDATA%\Docker Container Manager\settings.json`, together with the compose file in use, the recent files list and the window size. Delete the file to start again.
 

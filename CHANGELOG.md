@@ -6,6 +6,42 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.02] - 2026-11-12
+
+### Added
+- **Dark mode.** Settings > Theme: System (follows the Windows app setting), Light or Dark.
+  Dark mode includes dark text boxes, drop-down lists, menus, scroll bars and title bars.
+  A change applies the next time the app starts.
+- **Card view.** The **Cards** button (or Ctrl+T) switches between the list and cards. Each card
+  shows the icon, state, uptime, note and web page, with Start or Stop, Configure and Logs
+  buttons. The choice is remembered.
+- **App icons** next to each container. They're found from the image name (for example
+  `lscr.io/linuxserver/sonarr` gives `sonarr`), downloaded once from the
+  [dashboard-icons](https://github.com/homarr-labs/dashboard-icons) project and kept in
+  `%LOCALAPPDATA%\Docker Container Manager\Icons`. Containers without one get a letter in
+  their group colour. A `home.icon` label picks another icon (a name, a web address or a
+  picture file). Can be turned off in Settings.
+- **Group colours** in the Groups pane, the list's group headings and the cards. A `home.color`
+  label on any service of a group sets that group's colour.
+- **Check for updates** in the group bar. It asks each image's registry (Docker Hub, GHCR,
+  lscr.io and others) for the newest digest of the tag and compares it with the image on this
+  PC, without downloading anything. Containers with a newer image show **Update available**,
+  and the state list has an **Updates available** filter. It also runs when the app starts,
+  at most every 12 hours (can be turned off in Settings).
+- **Disk usage** window (header button): space used by images, containers, volumes and the
+  build cache, every image with its size and which containers use it, and buttons to remove
+  unnamed images, remove unused images, clear the build cache, remove unused networks and remove unused
+  volumes (it lists the volumes and asks twice, because their data is deleted for good).
+- **Tidy spacing** in the Check window re-indents the compose file to two spaces per level.
+  It is only saved when `docker compose config` reads the tidied file exactly the same as the
+  original, and a backup is kept first.
+
+### Changed
+- The list's group headings have a colour bar and a simpler expand arrow.
+- The window opens wide enough for the header buttons to fit on one line (when the screen allows).
+- The window opens at 1650 x 1080 by default, and the Activity log starts taller (221).
+- The Activity log's height is remembered when you drag the divider, like the window size.
+
 ## [1.01] - 2026-11-12
 
 ### Added
