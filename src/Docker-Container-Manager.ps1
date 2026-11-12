@@ -44,7 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.02'
+$script:AppVersion = '1.03'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 
 #region BUNDLE-ASSETS
@@ -89,6 +89,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 namespace Dcm {
     public class Runner {
@@ -104,7 +105,10 @@ namespace Dcm {
 
         // capture = true keeps stdout and stderr for the caller (quick queries);
         // capture = false streams every line to Lines as it arrives (actions, logs).
-        public Runner(string exe, string[] args, string workingDir, bool capture) {
+        public Runner(string exe, string[] args, string workingDir, bool capture) : this(exe, args, workingDir, capture, null) { }
+
+        // stdinFile: a file whose bytes are fed to the program's input (used to send files over ssh).
+        public Runner(string exe, string[] args, string workingDir, bool capture, string stdinFile) {
             _capture = capture;
             string joined = Join(args);
             CommandLine = "docker " + joined;
@@ -118,6 +122,8 @@ namespace Dcm {
             if (!String.IsNullOrEmpty(workingDir)) { psi.WorkingDirectory = workingDir; }
             psi.EnvironmentVariables["COMPOSE_ANSI"] = "never";
             psi.EnvironmentVariables["NO_COLOR"] = "1";
+            bool feed = !String.IsNullOrEmpty(stdinFile);
+            psi.RedirectStandardInput = feed;
             Proc = new Process();
             Proc.StartInfo = psi;
             Proc.OutputDataReceived += OnOut;
@@ -125,6 +131,18 @@ namespace Dcm {
             Proc.Start();
             Proc.BeginOutputReadLine();
             Proc.BeginErrorReadLine();
+            if (feed) {
+                Process p = Proc;
+                string path = stdinFile;
+                Thread t = new Thread(delegate() {
+                    try {
+                        using (System.IO.FileStream fs = System.IO.File.OpenRead(path)) { fs.CopyTo(p.StandardInput.BaseStream); }
+                        p.StandardInput.Close();
+                    } catch (Exception) { try { p.StandardInput.Close(); } catch (Exception) { } }
+                });
+                t.IsBackground = true;
+                t.Start();
+            }
         }
 
         private void OnOut(object sender, DataReceivedEventArgs e) {
@@ -327,7 +345,29 @@ function Get-DefaultSettings {
         WindowHeight      = 1080
         WindowMaximised   = $false
         LogHeight         = 221
+        Machines          = @()
+        Machine           = ''
+        ShowProgress      = $true
     }
+}
+
+# One other Docker machine, reached over SSH (see Get-MachineRunnerArgs).
+function ConvertTo-Machine($Item) {
+    if ($null -eq $Item) { return $null }
+    $get = { param($k) $v = if ($Item -is [Collections.IDictionary]) { $Item[$k] } else { $p = $Item.PSObject.Properties[$k]; if ($p) { $p.Value } }; if ($null -eq $v) { '' } else { ([string]$v).Trim() } }
+    $m = [ordered]@{
+        Name    = & $get 'Name'
+        Login   = & $get 'Login'
+        Port    = & $get 'Port'
+        Folder  = (& $get 'Folder').TrimEnd('/')
+        Project = (& $get 'Project').ToLowerInvariant()
+        EnvFile = & $get 'EnvFile'
+        Docker  = & $get 'Docker'
+        WebHost = & $get 'WebHost'
+    }
+    if (-not $m.Name -or -not $m.Login) { return $null }
+    if (-not $m.Docker) { $m.Docker = 'docker' }
+    return $m
 }
 
 function Read-Settings {
@@ -349,6 +389,8 @@ function Read-Settings {
     if (-not ([string]$s.LabelPrefix).Trim()) { $s.LabelPrefix = 'home' }
     if ($s.ViewMode -notin 'List', 'Cards') { $s.ViewMode = 'List' }
     if ($s.Theme -notin 'System', 'Light', 'Dark') { $s.Theme = 'System' }
+    $s.Machines = @(foreach ($m in @($s.Machines)) { $n = ConvertTo-Machine $m; if ($n) { $n } })
+    if (-not @($s.Machines | Where-Object { $_.Name -eq $s.Machine }).Count) { $s.Machine = '' }
     return $s
 }
 
@@ -369,6 +411,9 @@ $script:Settings = Read-Settings
 # ---------------------------------------------------------------------------
 $script:DockerExe      = $null
 $script:DockerState    = 'unknown'   # unknown | ok | down | missing
+$script:RemoteError    = ''
+$script:OldCompose     = $false
+$script:UpdatingMachines = $false
 $script:ComposePath    = ''
 $script:ComposeDir     = ''
 $script:ProjectName    = ''
@@ -458,12 +503,97 @@ function Find-DockerDesktop {
     return $null
 }
 
-function Get-ComposeArguments {
+# ---------------------------------------------------------------------------
+# Machines: "This PC" runs docker.exe here. Any other machine (a Linux laptop,
+# a VM, a Synology NAS) is reached with Windows' own ssh.exe: each docker
+# command runs there, against the compose file and .env in that machine's
+# folder. The compose file on this PC is the master; Send to machine copies it
+# (with that machine's Env_ file as .env) across.
+# ---------------------------------------------------------------------------
+function Get-Machine {
+    $name = [string]$script:Settings.Machine
+    if (-not $name) { return $null }
+    $m = @($script:Settings.Machines | Where-Object { $_.Name -eq $name })
+    if ($m.Count) { return $m[0] } else { return $null }
+}
+
+function Get-MachineName { $m = Get-Machine; if ($m) { return $m.Name } else { return 'This PC' } }
+
+function Find-Ssh([string]$Name = 'ssh.exe') {
+    foreach ($dir in @((Join-Path $env:SystemRoot 'Sysnative\OpenSSH'), (Join-Path $env:SystemRoot 'System32\OpenSSH'))) {
+        $p = Join-Path $dir $Name
+        if (Test-Path -LiteralPath $p) { return $p }
+    }
+    $cmd = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { return $cmd.Source }
+    return $null
+}
+
+# Docker can be used: docker.exe here, or ssh.exe for another machine.
+function Test-DockerReady {
+    if (Get-Machine) { return [bool](Find-Ssh) }
+    return [bool]$script:DockerExe
+}
+
+# Quotes one word for the remote (POSIX) shell.
+function ConvertTo-ShQuote([string]$Text) {
+    if ($Text -match '^[A-Za-z0-9_./:=@%+,-]+$') { return $Text }
+    return "'" + $Text.Replace("'", "'\''") + "'"
+}
+
+# SSH commands don't read the login profile, so Synology's /usr/local/bin isn't on PATH.
+function Get-RemotePathPrefix { return 'PATH="$PATH:/usr/local/bin:/usr/bin:/bin"; ' }
+
+function Get-SshArguments($Machine, [switch]$Tty) {
+    $a = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ServerAliveInterval=20')
+    if ($Machine.Port) { $a += @('-p', [string]$Machine.Port) }
+    if ($Tty) { $a += '-t' }
+    return $a + @([string]$Machine.Login)
+}
+
+function Get-MachineHost($Machine) {
+    if ($Machine.WebHost) { return $Machine.WebHost }
+    return (([string]$Machine.Login -split '@')[-1])
+}
+
+function Get-RemoteComposePath($Machine) {
+    return ('{0}/{1}' -f $Machine.Folder, [IO.Path]::GetFileName($script:ComposePath))
+}
+
+function Get-ComposeArguments([switch]$Local) {
+    $m = if ($Local) { $null } else { Get-Machine }
+    if ($m) {
+        $a = @('compose', '--ansi', 'never', '--progress', 'plain', '-f', (Get-RemoteComposePath $m), '--project-directory', $m.Folder)
+        # The stack may have been started under another name (Synology Container Manager uses the project's name).
+        if ($m.Project) { $a += @('-p', $m.Project) }
+        return $a
+    }
     return @('compose', '--ansi', 'never', '--progress', 'plain', '-f', $script:ComposePath, '--project-directory', $script:ComposeDir)
 }
 
+# Starts docker here, or over ssh on the chosen machine. CommandLine always
+# reads "docker ..." so the Activity log looks the same either way.
+function New-DockerRunner([string[]]$Arguments, [bool]$Capture, [switch]$Local) {
+    $m = if ($Local) { $null } else { Get-Machine }
+    if (-not $m) {
+        if (-not $script:DockerExe) { throw 'docker.exe was not found.' }
+        return New-Object Dcm.Runner($script:DockerExe, [string[]]$Arguments, $script:ComposeDir, $Capture)
+    }
+    $ssh = Find-Ssh
+    if (-not $ssh) { throw "ssh.exe wasn't found. Turn on the OpenSSH Client in Windows Settings > Apps > Optional features." }
+    $remote = (Get-RemotePathPrefix) + $m.Docker + ' ' + (($Arguments | ForEach-Object { ConvertTo-ShQuote ([string]$_) }) -join ' ')
+    $r = New-Object Dcm.Runner($ssh, [string[]](@(Get-SshArguments $m) + @($remote)), $script:ComposeDir, $Capture)
+    $r.CommandLine = 'docker ' + [Dcm.Runner]::Join([string[]]$Arguments)
+    return $r
+}
+
+# Runs a shell command on the machine (not docker), optionally feeding a file to it.
+function New-SshStep($Machine, [string]$Command, [string]$Display, [string]$Stdin) {
+    return @{ Exe = 'ssh'; Args = @(Get-SshArguments $Machine) + @($Command); Display = $Display; Stdin = $Stdin; AllowFail = $false }
+}
+
 function Test-DockerDownMessage([string]$Text) {
-    return ($Text -match 'error during connect|Cannot connect to the Docker daemon|docker daemon is not running|dockerDesktopLinuxEngine|docker_engine|The system cannot find the file specified|failed to connect to the docker API')
+    return ($Text -match 'error during connect|Cannot connect to the Docker daemon|docker daemon is not running|dockerDesktopLinuxEngine|docker_engine|The system cannot find the file specified|failed to connect to the docker API|ssh: |Connection refused|Connection timed out|Could not resolve hostname|Permission denied|Host key verification failed|No route to host|ssh.exe wasn')
 }
 
 function Get-FirstLines([string]$Text, [int]$Count = 3) {
@@ -474,11 +604,10 @@ function Get-FirstLines([string]$Text, [int]$Count = 3) {
 # Starts a quick docker query. $OnDone gets an object with ExitCode, Output and
 # Error once docker has finished (or straight away if docker can't be started).
 function Start-DockerCall {
-    param([string[]]$Arguments, [scriptblock]$OnDone, [switch]$Compose)
-    $full = if ($Compose) { @(Get-ComposeArguments) + $Arguments } else { $Arguments }
+    param([string[]]$Arguments, [scriptblock]$OnDone, [switch]$Compose, [switch]$Local)
+    $full = if ($Compose) { @(Get-ComposeArguments -Local:$Local) + $Arguments } else { $Arguments }
     try {
-        if (-not $script:DockerExe) { throw 'docker.exe was not found.' }
-        $runner = New-Object Dcm.Runner($script:DockerExe, [string[]]$full, $script:ComposeDir, $true)
+        $runner = New-DockerRunner $full $true -Local:$Local
         [void]$script:Calls.Add(@{ Runner = $runner; OnDone = $OnDone; Started = [DateTime]::Now })
     } catch {
         $fail = [pscustomobject]@{ ExitCode = -1; Output = ''; Error = $_.Exception.Message }
@@ -933,6 +1062,8 @@ $mainXaml = @'
                 </StackPanel>
                 <!-- The buttons wrap onto a second line when the window is narrow, so the title is never cut off. -->
                 <WrapPanel x:Name="HeaderButtons" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <ComboBox x:Name="CmbMachine" Width="150" Margin="0,3,6,3" VerticalContentAlignment="Center"
+                              ToolTip="Which machine's Docker to manage. Other machines are reached over SSH."/>
                     <ComboBox x:Name="CmbRecent" Width="230" Margin="0,3,16,3" VerticalContentAlignment="Center"
                               ToolTip="Switch to another compose file you've used on this PC"/>
                     <Button x:Name="BtnBrowse" Content="Compose file..." Tag="&#xE8E5;" Style="{DynamicResource HeaderBtn}"
@@ -947,6 +1078,8 @@ $mainXaml = @'
                             ToolTip="How much space images, containers and the build cache use, and clean-up"/>
                     <Button x:Name="BtnFolder" Content="Folder" Tag="&#xE8B7;" Style="{DynamicResource HeaderBtn}"
                             ToolTip="Open the compose file's folder"/>
+                    <Button x:Name="BtnSend" Content="Send" Tag="&#xE898;" Style="{DynamicResource HeaderBtn}" Visibility="Collapsed"
+                            ToolTip="Copy the compose file and this machine's Env_ file (as .env) to the machine"/>
                     <Button x:Name="BtnSettings" Content="Settings" Tag="&#xE713;" Style="{DynamicResource HeaderBtn}"/>
                     <Button x:Name="BtnAbout" Content="About" Tag="&#xE946;" Style="{DynamicResource HeaderBtn}" Margin="0,3,0,3"/>
                 </WrapPanel>
@@ -1438,7 +1571,7 @@ $mainXaml = @'
 
 $window = New-XamlObject $mainXaml
 $ui = @{}
-foreach ($name in 'ImgLogo', 'HeaderTitle', 'HeaderButtons', 'TxtSubtitle', 'CmbRecent', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnDisk', 'BtnFolder', 'BtnSettings', 'BtnAbout',
+foreach ($name in 'ImgLogo', 'HeaderTitle', 'HeaderButtons', 'TxtSubtitle', 'CmbMachine', 'BtnSend', 'CmbRecent', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnDisk', 'BtnFolder', 'BtnSettings', 'BtnAbout',
     'Banner', 'BannerGlyph', 'BannerText', 'CmbEnvTemplate', 'BannerAction', 'BannerRetry',
     'LstGroups', 'TxtSearch', 'SearchHint', 'CmbState', 'BtnView', 'BtnStart', 'BtnStop', 'BtnRestart', 'BtnUpdate', 'BtnConfigure', 'BtnLogs', 'BtnOpen',
     'TxtGroupName', 'TxtGroupInfo', 'BtnApply', 'BtnGroupStart', 'BtnGroupStop', 'BtnGroupUpdate', 'BtnRemoveOrphans', 'BtnCheckUpdates', 'BtnRefresh',
@@ -1501,6 +1634,25 @@ function Hide-Banner { $ui.Banner.Visibility = 'Collapsed'; $script:BannerKind =
 
 # One place decides which banner shows, most important first.
 function Update-Banner {
+    $m = Get-Machine
+    if ($m -and $script:ComposePath -and (Test-Path -LiteralPath $script:ComposePath)) {
+        if (-not (Find-Ssh)) {
+            Show-Banner -Kind error -Text "ssh.exe wasn't found, so $($m.Name) can't be reached. Turn on the OpenSSH Client in Windows Settings > System > Optional features."
+            return
+        }
+        if ($script:DockerState -eq 'down') {
+            Show-Banner -Kind warn -Text "$($m.Name) can't be reached over SSH, or Docker isn't running there, so the status below may be out of date. $script:RemoteError" `
+                -Action @{ Text = 'Machines...'; Glyph = [string][char]0xE713; Click = { Show-Machines } }
+            return
+        }
+        if ($script:ConfigError) {
+            Show-Banner -Kind error -Text ("$($m.Name) couldn't read its compose file, so the list shows the last version that worked. Docker says: " + $script:ConfigError + " Send to machine copies the compose file and .env there.") `
+                -Action @{ Text = 'Send to machine...'; Glyph = [string][char]0xE898; Click = { Invoke-SendToMachine } }
+            return
+        }
+        Hide-Banner
+        return
+    }
     if ($script:DockerState -eq 'missing') {
         Show-Banner -Kind error -Text "Docker isn't installed (docker.exe wasn't found). Install Docker Desktop, then press Try again."
         return
@@ -2150,14 +2302,20 @@ function Set-ComposeFile([string]$Path) {
     $script:Rows.Clear()
     $script:RowIndex = @{}
     $script:FileStamp = Get-FileStamp
-    $ui.TxtSubtitle.Text = $full
+    $ui.TxtSubtitle.Text = Get-ComposeDisplay
     Write-Activity "Compose file: $full"
     Request-ConfigLoad
 }
 
+function Get-ComposeDisplay {
+    $m = Get-Machine
+    if ($m) { return ('{0}: {1}' -f $m.Name, (Get-RemoteComposePath $m)) }
+    return $script:ComposePath
+}
+
 function Get-FileStamp {
     if (-not $script:ComposePath) { return '' }
-    $parts = foreach ($f in @($script:ComposePath, (Join-Path $script:ComposeDir '.env'))) {
+    $parts = foreach ($f in @($script:ComposePath, (Get-ConfigureEnvPath))) {
         $i = Get-Item -LiteralPath $f -ErrorAction SilentlyContinue
         if ($i) { '{0}:{1}' -f $i.LastWriteTimeUtc.Ticks, $i.Length } else { '-' }
     }
@@ -2173,16 +2331,25 @@ function Request-ConfigLoad {
 
 function Start-ConfigLoad {
     $script:ConfigWanted = $false
-    if (-not $script:ComposePath -or -not (Test-Path -LiteralPath $script:ComposePath) -or -not $script:DockerExe) { Update-Banner; Update-View; return }
+    if (-not $script:ComposePath -or -not (Test-Path -LiteralPath $script:ComposePath) -or -not (Test-DockerReady)) { Update-Banner; Update-View; return }
     if ($script:ConfigLoading) { $script:ConfigWanted = $true; return }
     $script:ConfigLoading = $true
     $script:LoadingGen = $script:ConfigGen
     Set-Status 'Reading the compose file...'
     if ($script:CheckForm) { Update-CheckWindow } else { Update-CheckBadge }
     # --no-env-resolution: a missing env_file on this machine shouldn't hide the whole list.
-    Start-DockerCall -Compose -Arguments @('config', '--format', 'json', '--no-env-resolution') -OnDone {
+    # Compose before 2.24 (Synology ships 2.20) doesn't know --no-env-resolution.
+    $cfgArgs = @('config', '--format', 'json')
+    if (-not $script:OldCompose) { $cfgArgs += '--no-env-resolution' }
+    Start-DockerCall -Compose -Arguments $cfgArgs -OnDone {
         param($res)
         if ($script:LoadingGen -ne $script:ConfigGen) { $script:ConfigLoading = $false; $script:ConfigWanted = $true; return }
+        if ($res.ExitCode -ne 0 -and -not $script:OldCompose -and $res.Error -match 'unknown flag: --no-env-resolution') {
+            $script:OldCompose = $true
+            $script:ConfigLoading = $false
+            Request-ConfigLoad
+            return
+        }
         if ($res.ExitCode -ne 0) {
             $script:ConfigLoading = $false
             $msg = Get-FirstLines $res.Error 4
@@ -2346,7 +2513,7 @@ function Import-ComposeConfig($Config, [hashtable]$Hashes) {
     $msg = "Read $count services from the compose file (project '$script:ProjectName')."
     if (-not $first -and $added) { $msg += " $added new." }
     Write-Activity $msg
-    $ui.TxtSubtitle.Text = "$script:ComposePath   ·   project $script:ProjectName   ·   $count services"
+    $ui.TxtSubtitle.Text = (Get-ComposeDisplay) + "   ·   project $script:ProjectName   ·   $count services"
     Update-Banner
     Update-Groups
     Update-View -Refilter
@@ -2369,23 +2536,27 @@ function Start-Poll {
     if ($script:PollRunning -or -not $script:ConfigLoaded -or -not $script:ProjectName) { return }
     $script:PollRunning = $true
     $script:PollProject = $script:ProjectName
+    $script:PollMachine = [string]$script:Settings.Machine
     Start-DockerCall -Arguments @('ps', '-a', '--no-trunc', '--filter', "label=com.docker.compose.project=$script:ProjectName", '--format', $script:PsFormat) -OnDone {
         param($res)
         $script:PollRunning = $false
         $script:NextPoll = [DateTime]::Now.AddSeconds($(if ($window.IsVisible) { $script:Settings.RefreshSeconds } else { 30 }))
+        # The machine was switched while docker ps was running: ignore this answer.
+        if ($script:PollMachine -ne [string]$script:Settings.Machine) { $script:NextPoll = [DateTime]::MinValue; return }
         if ($res.ExitCode -ne 0) {
             $msg = Get-FirstLines $res.Error 2
-            if ($script:DockerState -ne 'down') { Write-Activity "Docker isn't responding: $msg" }
+            if ($script:DockerState -ne 'down') { Write-Activity "Docker isn't responding on $(Get-MachineName): $msg" }
             $script:DockerState = 'down'
+            $script:RemoteError = $msg
             Update-Banner
             Update-Groups
-            Set-Status "Docker isn't running."
+            Set-Status $(if (Get-Machine) { "$(Get-MachineName) can't be reached." } else { "Docker isn't running." })
             return
         }
         # The compose file was switched while docker ps was running: ignore this answer.
         if (-not $script:ConfigLoaded -or $script:PollProject -ne $script:ProjectName) { $script:NextPoll = [DateTime]::MinValue; return }
         if ($script:DockerState -ne 'ok') {
-            if ($script:DockerState -eq 'down') { Write-Activity 'Docker is running again.' }
+            if ($script:DockerState -eq 'down') { Write-Activity "Docker is running again on $(Get-MachineName)." }
             $script:DockerState = 'ok'
             Update-Banner
         }
@@ -2723,11 +2894,14 @@ function Update-SelectionButtons {
 # Actions. Each job is a list of docker commands run one after another; jobs
 # queue up and run one at a time, with their output in the activity log.
 # ---------------------------------------------------------------------------
-function Add-Job([string]$Label, [object[]]$Steps) {
+function Add-Job([string]$Label, [object[]]$Steps, [switch]$Reload) {
     $steps = @($Steps | Where-Object { $_ })
     if (-not $steps.Count) { return }
-    if (-not $script:DockerExe) { [void][Windows.MessageBox]::Show($window, "docker.exe wasn't found, so nothing can be started.", $script:AppName, 'OK', 'Warning'); return }
-    $script:JobQueue.Enqueue(@{ Label = $Label; Steps = $steps; Index = 0; Runner = $null; Failed = $false })
+    if (-not (Test-DockerReady)) {
+        $what = if (Get-Machine) { "ssh.exe wasn't found" } else { "docker.exe wasn't found" }
+        [void][Windows.MessageBox]::Show($window, "$what, so nothing can be started.", $script:AppName, 'OK', 'Warning'); return
+    }
+    $script:JobQueue.Enqueue(@{ Label = $Label; Steps = $steps; Index = 0; Runner = $null; Failed = $false; Reload = [bool]$Reload })
     $script:Timer.Interval = [TimeSpan]::FromMilliseconds(200)
     Update-BusyState
     Update-Jobs
@@ -2747,7 +2921,7 @@ function Update-Jobs {
         $r = $job.Runner
         $line = $null
         $n = 0
-        while ($n -lt 400 -and $r.Lines.TryDequeue([ref]$line)) { Write-Activity ('    ' + $line) -Plain; $n++ }
+        while ($n -lt 400 -and $r.Lines.TryDequeue([ref]$line)) { Write-Activity ('    ' + $line) -Plain; Add-ProgressLine $line; $n++ }
         if (-not $r.IsDone -or -not $r.Lines.IsEmpty) { return }
         $step = $job.Steps[$job.Index]
         if ($r.ExitCode -ne 0 -and -not $step.AllowFail) {
@@ -2765,6 +2939,7 @@ function Update-Jobs {
         $job = $script:JobQueue.Dequeue()
         $script:CurrentJob = $job
         Write-Activity "$($job.Label)..."
+        Show-JobProgress $job
         Start-JobStep $job
         Update-BusyState
     }
@@ -2773,8 +2948,16 @@ function Update-Jobs {
 function Start-JobStep($Job) {
     $step = $Job.Steps[$Job.Index]
     try {
-        $Job.Runner = New-Object Dcm.Runner($script:DockerExe, [string[]]$step.Args, $script:ComposeDir, $false)
+        if ($step.Exe -eq 'ssh') {
+            $ssh = Find-Ssh
+            if (-not $ssh) { throw "ssh.exe wasn't found." }
+            $Job.Runner = New-Object Dcm.Runner($ssh, [string[]]$step.Args, $script:ComposeDir, $false, [string]$step.Stdin)
+            $Job.Runner.CommandLine = $step.Display
+        } else {
+            $Job.Runner = New-DockerRunner ([string[]]$step.Args) $false
+        }
         Write-Activity ('  > ' + (Get-ShortCommand $Job.Runner.CommandLine)) -Plain
+        Update-JobProgress $Job
     } catch {
         $Job.Failed = $true
         Write-Activity "Couldn't start docker: $($_.Exception.Message)"
@@ -2784,13 +2967,15 @@ function Start-JobStep($Job) {
 
 # Hides the -f/--project-directory noise in the log.
 function Get-ShortCommand([string]$CommandLine) {
-    return ($CommandLine -replace ' --ansi never --progress plain', '' -replace ' -f ("[^"]+"|\S+) --project-directory ("[^"]+"|\S+)', '')
+    return ($CommandLine -replace ' --ansi never --progress plain', '' -replace ' -f ("[^"]+"|\S+) --project-directory ("[^"]+"|\S+)( -p \S+)?', '')
 }
 
 function Complete-Job($Job) {
+    Complete-JobProgress $Job
     $script:CurrentJob = $null
     Update-BusyState
     $script:NextPoll = [DateTime]::MinValue
+    if ($Job.Reload) { Request-ConfigLoad }
     if (-not $script:JobQueue.Count) {
         Start-LocalDigestScan
         if ($script:DiskForm) { Update-DiskWindow }
@@ -2812,6 +2997,149 @@ function Stop-CurrentJob {
     Complete-Job $job
     foreach ($q in @($script:JobQueue.ToArray())) { Write-Activity "Cancelled: $($q.Label)" }
     $script:JobQueue.Clear()
+}
+
+# ---------------------------------------------------------------------------
+# Progress window: shows the running job (start, stop, update, send...) with
+# Docker's output as it arrives. It closes itself a few seconds after a job
+# succeeds, and stays open when one fails.
+# ---------------------------------------------------------------------------
+$progressXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Working" Width="760" Height="420" MinWidth="460" MinHeight="260" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <DockPanel Margin="16">
+        <StackPanel DockPanel.Dock="Top">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <TextBlock x:Name="PrgGlyph" FontFamily="Segoe MDL2 Assets" FontSize="20" Text="&#xE895;" Foreground="{StaticResource Accent}"
+                           VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <StackPanel Grid.Column="1">
+                    <TextBlock x:Name="PrgTitle" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock x:Name="PrgStep" Foreground="{StaticResource SoftInk}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Grid>
+            <ProgressBar x:Name="PrgBar" Height="8" Margin="0,12,0,4" Minimum="0" Maximum="1"
+                         Foreground="{StaticResource Accent}" Background="{StaticResource AccentSoft}" BorderThickness="0"/>
+            <ProgressBar x:Name="PrgBusyBar" Height="3" Margin="0,0,0,10" IsIndeterminate="True"
+                         Foreground="{StaticResource Accent}" Background="Transparent" BorderThickness="0"/>
+        </StackPanel>
+        <Grid DockPanel.Dock="Bottom" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBlock x:Name="PrgNote" Foreground="{StaticResource SoftInk}" VerticalAlignment="Center" TextWrapping="Wrap"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button x:Name="PrgCancel" Content="Cancel" Tag="&#xE711;" Style="{StaticResource Btn}"
+                        ToolTip="Stop what Docker is doing now, and anything waiting"/>
+                <Button x:Name="PrgClose" Content="Hide" Style="{StaticResource PrimaryBtn}" Margin="0"
+                        ToolTip="Close this window. The work carries on, and the Activity log keeps the details."/>
+            </StackPanel>
+        </Grid>
+        <TextBox x:Name="PrgOutput" IsReadOnly="True" FontFamily="Consolas" FontSize="12" TextWrapping="NoWrap"
+                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                 Background="{StaticResource Card}" Foreground="{StaticResource Ink}" BorderBrush="{StaticResource Edge}"/>
+    </DockPanel>
+</Window>
+'@
+
+$script:ProgressForm = $null
+
+function Show-JobProgress($Job) {
+    if (-not $script:Settings.ShowProgress -or -not $window.IsVisible) { return }
+    $p = $script:ProgressForm
+    if (-not $p) {
+        $w = New-XamlObject $progressXaml
+        $w.Owner = $window
+        if ($window.Icon) { $w.Icon = $window.Icon }
+        $p = @{ Window = $w; CloseAt = $null; Lines = 0 }
+        foreach ($n in 'PrgGlyph', 'PrgTitle', 'PrgStep', 'PrgBar', 'PrgBusyBar', 'PrgNote', 'PrgCancel', 'PrgClose', 'PrgOutput') { $p[$n] = $w.FindName($n) }
+        $p.PrgCancel.Add_Click({
+                if ($script:CurrentJob -and (Confirm-Action "Stop $($script:CurrentJob.Label)?`n`nThe docker command is stopped part way, and anything waiting is cancelled.")) { Stop-CurrentJob }
+            })
+        $p.PrgClose.Add_Click({ if ($script:ProgressForm) { $script:ProgressForm.Window.Close() } })
+        $w.Add_Closed({ $script:ProgressForm = $null })
+        $script:ProgressForm = $p
+        $w.Show()
+    }
+    $p.CloseAt = $null
+    if ($p.Lines) { $p.PrgOutput.AppendText("`r`n") }
+    $p.PrgOutput.AppendText("== $($Job.Label) ==`r`n")
+    $p.Lines++
+    $p.Window.Title = 'Working - ' + (Get-MachineName)
+    $p.PrgTitle.Text = $Job.Label
+    $p.PrgGlyph.Text = [string][char]0xE895
+    $p.PrgGlyph.Foreground = $p.Window.FindResource('Accent')
+    $p.PrgBar.Value = 0
+    $p.PrgBusyBar.Visibility = 'Visible'
+    $p.PrgCancel.Visibility = 'Visible'
+    $p.PrgClose.Content = 'Hide'
+    Update-JobProgressNote
+}
+
+function Update-JobProgressNote {
+    $p = $script:ProgressForm
+    if (-not $p) { return }
+    $waiting = $script:JobQueue.Count
+    $p.PrgNote.Text = if ($waiting) { "$waiting more waiting after this." } else { 'Hide closes this window; the work carries on.' }
+}
+
+function Update-JobProgress($Job) {
+    $p = $script:ProgressForm
+    if (-not $p -or -not $Job.Runner) { return }
+    $n = $Job.Steps.Count
+    $p.PrgStep.Text = ('Step {0} of {1}:  {2}' -f ($Job.Index + 1), $n, (Get-ShortCommand $Job.Runner.CommandLine))
+    $p.PrgBar.Value = $Job.Index / [Math]::Max(1, $n)
+    $p.PrgOutput.AppendText('> ' + (Get-ShortCommand $Job.Runner.CommandLine) + "`r`n")
+    $p.PrgOutput.ScrollToEnd()
+    Update-JobProgressNote
+}
+
+function Add-ProgressLine([string]$Line) {
+    $p = $script:ProgressForm
+    if (-not $p) { return }
+    # Keep the box light: after 3000 lines, drop the oldest half.
+    if ($p.PrgOutput.LineCount -gt 3000) { $t = $p.PrgOutput.Text; $p.PrgOutput.Text = $t.Substring([Math]::Min($t.Length, [int]($t.Length / 2))) }
+    $p.PrgOutput.AppendText('  ' + $Line + "`r`n")
+    $p.PrgOutput.ScrollToEnd()
+}
+
+function Complete-JobProgress($Job) {
+    $p = $script:ProgressForm
+    if (-not $p) { return }
+    $more = ($script:JobQueue.Count -gt 0)
+    if ($more) { return }
+    $p.PrgBusyBar.Visibility = 'Collapsed'
+    $p.PrgCancel.Visibility = 'Collapsed'
+    $p.PrgClose.Content = 'Close'
+    if ($Job.Failed) {
+        $p.PrgBar.Value = $Job.Index / [Math]::Max(1, $Job.Steps.Count)
+        $p.PrgGlyph.Text = [string][char]0xEA39
+        $p.PrgGlyph.Foreground = $p.Window.FindResource('Bad')
+        $p.PrgStep.Text = 'Failed. The lines above say what Docker reported.'
+        $p.PrgNote.Text = ''
+        $p.PrgOutput.AppendText("Failed.`r`n")
+        $p.CloseAt = $null
+    } else {
+        $p.PrgBar.Value = 1
+        $p.PrgGlyph.Text = [string][char]0xE930
+        $p.PrgGlyph.Foreground = $p.Window.FindResource('Ok')
+        $p.PrgStep.Text = 'Done.'
+        $p.PrgNote.Text = ''
+        $p.PrgOutput.AppendText("Done.`r`n")
+        $p.CloseAt = [DateTime]::Now.AddSeconds(10)
+        $p.PrgClose.Content = 'Close (10)'
+    }
+    $p.PrgOutput.ScrollToEnd()
+}
+
+# Called by the heartbeat: counts down on the Close button and closes the window 10 seconds after a success.
+function Update-ProgressWindow {
+    $p = $script:ProgressForm
+    if (-not $p -or -not $p.CloseAt) { return }
+    $left = [int][Math]::Ceiling(($p.CloseAt - [DateTime]::Now).TotalSeconds)
+    if ($left -le 0) { $p.Window.Close(); return }
+    $p.PrgClose.Content = "Close ($left)"
 }
 
 function Update-BusyState {
@@ -2942,6 +3270,9 @@ function Invoke-GroupAction([string]$What) {
 function Open-Url([string]$Url) {
     if (-not $Url) { return }
     if ($Url -notmatch '^(?i)https?://') { Set-Status "Not a web address: $Url"; return }
+    # Ports published on another machine are on that machine, not on this PC.
+    $m = Get-Machine
+    if ($m) { $Url = $Url -replace '^(?i)(https?://)(localhost|127\.0\.0\.1)(?=[:/]|$)', ('${1}' + (Get-MachineHost $m)) }
     try { Start-Process -FilePath $Url } catch { Set-Status "Couldn't open $Url" }
 }
 
@@ -3256,7 +3587,7 @@ function Save-UpdateCache {
 
 # Reads the digests of the images on this PC, then marks containers with a newer image.
 function Start-LocalDigestScan {
-    if (-not $script:DockerExe -or $script:LocalScanRunning -or -not $script:ConfigLoaded) { return }
+    if (-not (Test-DockerReady) -or $script:LocalScanRunning -or -not $script:ConfigLoaded) { return }
     $refs = @($script:Rows | Where-Object { $_.InCompose -and (Get-ImageKey $_.Image) } | ForEach-Object Image | Sort-Object -Unique)
     if (-not $refs.Count) { return }
     $script:LocalScanRunning = $true
@@ -3648,10 +3979,10 @@ function Invoke-TidySpacing {
         Stamp = (Get-Item -LiteralPath $path).LastWriteTimeUtc
     }
     Set-Status 'Checking that Docker reads the tidied file the same way...'
-    Start-DockerCall -Arguments (Get-TidyConfigArguments $path) -OnDone {
+    Start-DockerCall -Local -Arguments (Get-TidyConfigArguments $path) -OnDone {
         param($before)
         $script:Tidy.Before = $before
-        Start-DockerCall -Arguments (Get-TidyConfigArguments $script:Tidy.TmpPath) -OnDone { param($after) Complete-TidySpacing $after }
+        Start-DockerCall -Local -Arguments (Get-TidyConfigArguments $script:Tidy.TmpPath) -OnDone { param($after) Complete-TidySpacing $after }
     }
 }
 
@@ -3829,7 +4160,8 @@ function Format-Bytes([double]$Bytes) {
 
 function Update-DiskWindow {
     $d = $script:DiskForm
-    if (-not $d -or -not $script:DockerExe) { return }
+    if (-not $d -or -not (Test-DockerReady)) { return }
+    $d.Window.Title = 'Disk usage - ' + (Get-MachineName)
     $d.Info.Text = 'Asking Docker...'
     Start-DockerCall -Arguments @('system', 'df', '--format', '{{json .}}') -OnDone {
         param($res)
@@ -4100,7 +4432,12 @@ function Get-ServiceFolders([string]$Service) {
     return @($list)
 }
 
-function Get-ConfigureEnvPath { return (Join-Path $script:ComposeDir '.env') }
+# On another machine the values live in its Env_ file here, which Send to machine copies across as .env.
+function Get-ConfigureEnvPath {
+    $m = Get-Machine
+    if ($m -and $m.EnvFile) { return (Join-Path $script:ComposeDir $m.EnvFile) }
+    return (Join-Path $script:ComposeDir '.env')
+}
 
 function Import-ConfigureEntries($State) {
     $compose = Read-TextFile $script:ComposePath
@@ -4149,7 +4486,9 @@ function Import-ConfigureEntries($State) {
         $files = @($info.EnvFiles | ForEach-Object { Resolve-ComposeVars $_ (Get-EnvTable $envVals) })
         $notes += 'It also reads variables from ' + ($files -join ', ') + ' (open that file to change them).'
     }
-    if (-not (Test-Path -LiteralPath (Get-ConfigureEnvPath))) { $notes += "There's no .env yet; saving creates one." }
+    if (-not (Test-Path -LiteralPath (Get-ConfigureEnvPath))) { $notes += "There's no $([IO.Path]::GetFileName((Get-ConfigureEnvPath))) yet; saving creates one." }
+    $m = Get-Machine
+    if ($m) { $notes += "Values are saved in $([IO.Path]::GetFileName((Get-ConfigureEnvPath))) on this PC. Save and recreate sends it to $($m.Name) first." }
     $State.Status.Text = ($notes -join '  ')
 }
 
@@ -4324,7 +4663,14 @@ function Save-ConfigureEntries($State, [switch]$Recreate) {
     $script:FileStamp = Get-FileStamp
     Request-ConfigLoad
     if ($Recreate -and $State.Row.HasContainer) {
-        Add-Job ('Apply settings: ' + $State.Service) (Get-RecreateSteps @($State.Row) -Force)
+        $steps = @()
+        if (Get-Machine) {
+            $send = Get-SendSteps (Get-Machine)
+            if (-not $send) { return }
+            $steps += $send
+        }
+        $steps += Get-RecreateSteps @($State.Row) -Force
+        Add-Job ('Apply settings: ' + $State.Service) $steps
         $State.Status.Text = 'Saved. Recreating the container with the new values...'
     } else {
         $State.Status.Text = if ($State.Row.HasContainer) { 'Saved. The container shows Changed until you recreate it.' } else { 'Saved. The container uses the new values when it is created.' }
@@ -4343,10 +4689,18 @@ function Backup-ConfigFile([string]$Path) {
 }
 
 function Open-ContainerShell([Dcm.Row]$Row) {
-    if (-not $Row -or -not $Row.IsRunning -or -not $script:DockerExe) { return }
-    $argLine = 'exec -it {0} sh -c "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"' -f $Row.ContainerName
+    if (-not $Row -or -not $Row.IsRunning -or -not (Test-DockerReady)) { return }
+    $m = Get-Machine
     try {
-        Start-Process -FilePath $script:DockerExe -ArgumentList $argLine
+        if ($m) {
+            # ssh -t gives the shell a terminal; the remote command is one quoted word.
+            $remote = (Get-RemotePathPrefix) + "$($m.Docker) exec -it $($Row.ContainerName) sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi'"
+            $argLine = [Dcm.Runner]::Join([string[]](@(Get-SshArguments $m -Tty) + @($remote)))
+            Start-Process -FilePath (Find-Ssh) -ArgumentList $argLine
+        } else {
+            $argLine = 'exec -it {0} sh -c "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"' -f $Row.ContainerName
+            Start-Process -FilePath $script:DockerExe -ArgumentList $argLine
+        }
         Write-Activity "Opened a shell in $($Row.ContainerName)"
     } catch { [void][Windows.MessageBox]::Show($window, "Couldn't open a shell: $($_.Exception.Message)", $script:AppName, 'OK', 'Error') }
 }
@@ -4568,7 +4922,7 @@ function Start-LogStream($State) {
     if ($State.InCompose) { $cmd = @(Get-ComposeArguments) + @('logs', '--no-color', '--no-log-prefix') + $opts + @($State.Service) }
     else { $cmd = @('logs') + $opts + @($State.Container) }
     try {
-        $State.Runner = New-Object Dcm.Runner($script:DockerExe, [string[]]$cmd, $script:ComposeDir, $false)
+        $State.Runner = New-DockerRunner ([string[]]$cmd) $false
         $State.Info.Text = 'Loading...'
     } catch {
         $State.Info.Text = "Couldn't read the logs: $($_.Exception.Message)"
@@ -4637,6 +4991,7 @@ $settingsXaml = @'
                     <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <TextBlock Text="Label prefix" Margin="0,5,0,10"/>
                 <StackPanel Grid.Column="1" Margin="0,0,0,10">
@@ -4665,8 +5020,10 @@ $settingsXaml = @'
                 <CheckBox x:Name="ChkTray" Grid.Row="6" Grid.ColumnSpan="2" Margin="0,0,0,8" Content="Minimise to the notification area (tray)"/>
                 <CheckBox x:Name="ChkIcons" Grid.Row="7" Grid.ColumnSpan="2" Margin="0,0,0,8"
                           Content="Show app icons (downloaded once from the dashboard-icons project and kept on this PC)"/>
-                <CheckBox x:Name="ChkUpdates" Grid.Row="8" Grid.ColumnSpan="2"
+                <CheckBox x:Name="ChkUpdates" Grid.Row="8" Grid.ColumnSpan="2" Margin="0,0,0,8"
                           Content="Check for newer images when the app starts (at most every 12 hours)"/>
+                <CheckBox x:Name="ChkProgress" Grid.Row="9" Grid.ColumnSpan="2"
+                          Content="Show a progress window while Docker is starting, stopping or updating containers"/>
             </Grid>
         </Border>
         <TextBlock x:Name="TxtWhere" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap" Margin="2,10,0,0"/>
@@ -4689,7 +5046,7 @@ function Show-Settings {
     $w.Owner = $window
     if ($window.Icon) { $w.Icon = $window.Icon }
     $f = @{ Window = $w; Saved = $false }
-    foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'CmbTheme', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'ChkIcons', 'ChkUpdates', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
+    foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'CmbTheme', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'ChkIcons', 'ChkUpdates', 'ChkProgress', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
     $script:SettingsForm = $f
     $f.TxtPrefix.Text = $script:Settings.LabelPrefix
     $f.TxtRefresh.Text = [string]$script:Settings.RefreshSeconds
@@ -4699,6 +5056,7 @@ function Show-Settings {
     $f.ChkTray.IsChecked = [bool]$script:Settings.MinimiseToTray
     $f.ChkIcons.IsChecked = [bool]$script:Settings.DownloadIcons
     $f.ChkUpdates.IsChecked = [bool]$script:Settings.CheckUpdatesOnStart
+    $f.ChkProgress.IsChecked = [bool]$script:Settings.ShowProgress
     foreach ($t in 'System', 'Light', 'Dark') { [void]$f.CmbTheme.Items.Add($t) }
     $f.CmbTheme.SelectedItem = [string]$script:Settings.Theme
     $f.TxtWhere.Text = "Saved in $script:SettingsPath"
@@ -4733,6 +5091,7 @@ function Show-Settings {
             $iconsChanged = ([bool]$f.ChkIcons.IsChecked -ne [bool]$script:Settings.DownloadIcons)
             $script:Settings.DownloadIcons = [bool]$f.ChkIcons.IsChecked
             $script:Settings.CheckUpdatesOnStart = [bool]$f.ChkUpdates.IsChecked
+            $script:Settings.ShowProgress = [bool]$f.ChkProgress.IsChecked
             $theme = [string]$f.CmbTheme.SelectedItem
             $themeChanged = ($theme -and $theme -ne $script:Settings.Theme)
             if ($theme) { $script:Settings.Theme = $theme }
@@ -4751,6 +5110,12 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.03' = @(
+        'A progress window shows what Docker is doing while containers start, stop or update (can be turned off in Settings).',
+        'Machines: manage Docker on other machines (a Linux laptop, a VM, a Synology NAS) over SSH from the list at the top.',
+        'Send to machine: copies the compose file and that machine''s Env_ file (as .env) across, keeping a backup of the old ones there.',
+        'Web pages, shells and logs open on the chosen machine; Configure saves to that machine''s Env_ file.'
+    )
     '1.02' = @(
         'Dark mode (follows Windows, or pick Light or Dark in Settings).',
         'Card view: switch between the list and cards with the Cards button or Ctrl+T.',
@@ -4843,10 +5208,10 @@ function Show-About {
         }
     }
     $script:AboutDockerText = $w.FindName('AboutDocker')
-    $script:AboutDockerText.Text = if ($script:DockerExe) { 'Docker: checking...' } else { "Docker: docker.exe wasn't found." }
+    $script:AboutDockerText.Text = if (Test-DockerReady) { 'Docker: checking...' } else { "Docker: docker.exe wasn't found." }
     $composeText = if ($script:ComposePath) { $script:ComposePath } else { 'none chosen' }
-    $w.FindName('AboutPaths').Text = "Compose file: $composeText`nSettings: $script:SettingsPath"
-    if ($script:DockerExe) {
+    $w.FindName('AboutPaths').Text = "Machine: $(Get-MachineName)`nCompose file: $composeText`nSettings: $script:SettingsPath"
+    if (Test-DockerReady) {
         Start-DockerCall -Arguments @('version', '--format', '{{.Client.Version}}|{{.Server.Version}}') -OnDone {
             param($res)
             $parts = @($res.Output.Trim() -split '\|')
@@ -4979,7 +5344,7 @@ $ui.CmbRecent.Add_SelectionChanged({
 $ui.BtnEditCompose.Add_Click({ Open-InEditor $script:ComposePath })
 $ui.BtnEditEnv.Add_Click({
         if (-not $script:ComposeDir) { return }
-        $envFile = Join-Path $script:ComposeDir '.env'
+        $envFile = Get-ConfigureEnvPath
         if (-not (Test-Path -LiteralPath $envFile)) {
             if (-not (Confirm-Action "There's no .env next to the compose file. Create an empty one?")) { return }
             try { [IO.File]::WriteAllText($envFile, '') } catch { [void][Windows.MessageBox]::Show($window, $_.Exception.Message, $script:AppName); return }
@@ -4987,6 +5352,14 @@ $ui.BtnEditEnv.Add_Click({
         Open-InEditor $envFile
     })
 $ui.BtnFolder.Add_Click({ if ($script:ComposeDir -and (Test-Path -LiteralPath $script:ComposeDir)) { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$script:ComposeDir`"" } })
+$ui.BtnSend.Add_Click({ Invoke-SendToMachine })
+$ui.CmbMachine.Add_SelectionChanged({
+        if ($script:UpdatingMachines) { return }
+        $item = $ui.CmbMachine.SelectedItem
+        if (-not $item) { return }
+        if ($item.Tag -eq '*edit*') { Update-MachineList; Show-Machines; return }
+        if ([string]$item.Tag -ne [string]$script:Settings.Machine) { Set-Machine ([string]$item.Tag) }
+    })
 $ui.BtnCheck.Add_Click({ Show-Check })
 $ui.BtnDisk.Add_Click({ Show-Disk })
 $ui.BtnSettings.Add_Click({ Show-Settings })
@@ -4994,7 +5367,7 @@ $ui.BtnAbout.Add_Click({ Show-About })
 $ui.BannerAction.Add_Click({ if ($script:BannerClick) { & $script:BannerClick } })
 $ui.BannerRetry.Add_Click({
         $script:DockerExe = Find-Docker
-        $script:DockerState = if ($script:DockerExe) { 'unknown' } else { 'missing' }
+        $script:DockerState = if (Test-DockerReady) { 'unknown' } else { 'missing' }
         Request-ConfigLoad
         $script:NextPoll = [DateTime]::MinValue
         Update-Banner
@@ -5240,6 +5613,7 @@ $script:Timer.Add_Tick({
             Update-Calls
             Update-Background
             Update-Jobs
+            Update-ProgressWindow
             Update-LogWindows
             $now = [DateTime]::Now
             # The compose file or .env saved? Wait a moment for the editor to finish, then re-read.
@@ -5271,6 +5645,371 @@ $script:Timer.Add_Tick({
     })
 
 # ---------------------------------------------------------------------------
+# Machines: picker, Send to machine and the Machines window
+# ---------------------------------------------------------------------------
+function Update-MachineList {
+    $script:UpdatingMachines = $true
+    try {
+        $ui.CmbMachine.Items.Clear()
+        $all = @(@{ Name = 'This PC'; Tag = ''; Tip = 'Docker on this PC' }) + @($script:Settings.Machines | ForEach-Object { @{ Name = $_.Name; Tag = $_.Name; Tip = "$($_.Login):$($_.Folder)" } })
+        foreach ($x in $all) {
+            $item = New-Object Windows.Controls.ComboBoxItem
+            $item.Content = $x.Name
+            $item.Tag = $x.Tag
+            $item.ToolTip = $x.Tip
+            [void]$ui.CmbMachine.Items.Add($item)
+            if ($x.Tag -eq [string]$script:Settings.Machine) { $ui.CmbMachine.SelectedItem = $item }
+        }
+        $edit = New-Object Windows.Controls.ComboBoxItem
+        $edit.Content = 'Machines...'
+        $edit.Tag = '*edit*'
+        $edit.FontStyle = 'Italic'
+        $edit.ToolTip = 'Add, change or remove machines'
+        [void]$ui.CmbMachine.Items.Add($edit)
+        $ui.BtnSend.Visibility = if (Get-Machine) { 'Visible' } else { 'Collapsed' }
+        $ui.BtnSend.ToolTip = if (Get-Machine) { "Copy the compose file and $(if ((Get-Machine).EnvFile) { (Get-Machine).EnvFile + ' (as .env)' } else { 'nothing else' }) to $(Get-MachineName)" } else { '' }
+    } finally {
+        $script:UpdatingMachines = $false
+    }
+}
+
+function Set-Machine([string]$Name) {
+    if ($script:CurrentJob -or $script:JobQueue.Count) {
+        [void][Windows.MessageBox]::Show($window, "Docker is still working on: $($script:CurrentJob.Label)`n`nSwitch machines when it has finished.", $script:AppName, 'OK', 'Information')
+        Update-MachineList
+        return
+    }
+    $script:Settings.Machine = $Name
+    Save-Settings
+    Update-MachineList
+    $script:ConfigGen++
+    $script:ProjectName = ''
+    $script:ConfigLoaded = $false
+    $script:ConfigError = ''
+    $script:RemoteError = ''
+    $script:OldCompose = $false
+    $script:DockerState = if (Test-DockerReady) { 'unknown' } else { 'missing' }
+    $script:Rows.Clear()
+    $script:RowIndex = @{}
+    $script:LocalDigests = @{}
+    $script:FileStamp = Get-FileStamp
+    $script:NextPoll = [DateTime]::MinValue
+    $m = Get-Machine
+    Write-Activity $(if ($m) { "Machine: $($m.Name) ($($m.Login), folder $($m.Folder))" } else { 'Machine: This PC' })
+    if ($script:ComposePath) { $ui.TxtSubtitle.Text = Get-ComposeDisplay }
+    Update-Banner
+    Update-Groups
+    Update-View -Refilter
+    Update-HeaderFit
+    Request-ConfigLoad
+    if ($script:DiskForm) { Update-DiskWindow }
+}
+
+# A copy of a file with Unix line endings and no BOM, for sending to Linux.
+function New-SendCopy([string]$Path) {
+    $dir = Join-Path ([IO.Path]::GetTempPath()) 'Docker Container Manager'
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    Get-ChildItem -LiteralPath $dir -Filter '*.send' -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } | Remove-Item -Force -ErrorAction SilentlyContinue
+    $text = [IO.File]::ReadAllText($Path)
+    if ($text.Length -and $text[0] -eq [char]0xFEFF) { $text = $text.Substring(1) }
+    $text = $text -replace "`r`n", "`n"
+    $target = Join-Path $dir ([guid]::NewGuid().ToString('N') + '.send')
+    [IO.File]::WriteAllText($target, $text, (New-Object Text.UTF8Encoding($false)))
+    return $target
+}
+
+# Steps that back up the files on the machine, then copy the compose file and
+# the machine's Env_ file (as .env) there. Returns nothing if a file is missing.
+function Get-SendSteps($Machine) {
+    if (-not $script:ComposePath -or -not (Test-Path -LiteralPath $script:ComposePath)) { return $null }
+    $envPath = $null
+    if ($Machine.EnvFile) {
+        $envPath = Join-Path $script:ComposeDir $Machine.EnvFile
+        if (-not (Test-Path -LiteralPath $envPath)) {
+            [void][Windows.MessageBox]::Show($window, "$($Machine.EnvFile) isn't next to the compose file, so nothing was sent.`n`nCreate it, or pick another Env_ file for $($Machine.Name) in Machines.", $script:AppName, 'OK', 'Warning')
+            return $null
+        }
+    }
+    $name = [IO.Path]::GetFileName($script:ComposePath)
+    $folder = ConvertTo-ShQuote $Machine.Folder
+    $remoteCompose = ConvertTo-ShQuote ($Machine.Folder + '/' + $name)
+    $tmpCompose = ConvertTo-ShQuote ($Machine.Folder + '/.' + $name + '.dcm-new')
+    $backup = 'mkdir -p ' + $folder + ' && cd ' + $folder + ' && stamp=$(date +%Y-%m-%d_%H%M%S) && for f in ' + (ConvertTo-ShQuote $name) + ' .env; do if [ -f "$f" ]; then cp -p "$f" "$f.$stamp.bak"; fi; done'
+    $steps = @(New-SshStep $Machine $backup "back up $name and .env in $($Machine.Folder)" $null)
+    $steps += New-SshStep $Machine ('cat > ' + $tmpCompose + ' && mv ' + $tmpCompose + ' ' + $remoteCompose) "copy $name to $($Machine.Name)" (New-SendCopy $script:ComposePath)
+    if ($envPath) {
+        $remoteEnv = ConvertTo-ShQuote ($Machine.Folder + '/.env')
+        $tmpEnv = ConvertTo-ShQuote ($Machine.Folder + '/.env.dcm-new')
+        $steps += New-SshStep $Machine ('cat > ' + $tmpEnv + ' && mv ' + $tmpEnv + ' ' + $remoteEnv) "copy $($Machine.EnvFile) to $($Machine.Name) as .env" (New-SendCopy $envPath)
+    }
+    return $steps
+}
+
+function Invoke-SendToMachine {
+    $m = Get-Machine
+    if (-not $m) { return }
+    $name = [IO.Path]::GetFileName($script:ComposePath)
+    $lines = @("$name  ->  $($m.Folder)/$name")
+    if ($m.EnvFile) { $lines += "$($m.EnvFile)  ->  $($m.Folder)/.env" }
+    $msg = "Copy these to $($m.Name) ($($m.Login))?`n`n  " + ($lines -join "`n  ") + "`n`nThe files there now are kept as dated .bak copies first. Nothing is restarted: containers whose settings changed show Changed afterwards, and Apply changes recreates them."
+    if (-not (Confirm-Action $msg)) { return }
+    $steps = Get-SendSteps $m
+    if (-not $steps) { return }
+    Add-Job "Send to $($m.Name)" $steps -Reload
+}
+
+$machinesXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Machines" Width="760" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <StackPanel Margin="18">
+        <TextBlock Text="Machines" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,4"/>
+        <TextBlock Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" Margin="0,0,0,12"
+                   Text="Other computers that run your compose file, such as a Linux laptop, a VM or a Synology NAS. The app reaches them with SSH and runs docker there. The compose file on this PC is the master: Send copies it, with the machine's Env_ file as .env, to the machine's folder."/>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <DockPanel Margin="0,0,14,0">
+                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+                    <Button x:Name="BtnAddMachine" Content="Add" Tag="&#xE710;" Style="{StaticResource Btn}"/>
+                    <Button x:Name="BtnRemoveMachine" Content="Remove" Tag="&#xE74D;" Style="{StaticResource Btn}" Margin="0"/>
+                </StackPanel>
+                <ListBox x:Name="LstMachines" MinHeight="250" Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" Foreground="{StaticResource Ink}"/>
+            </DockPanel>
+            <Border Grid.Column="1" Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="14">
+                <Grid x:Name="MachineForm">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="Name" VerticalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBox x:Name="TxtMName" Grid.Column="1" Style="{StaticResource Field}" Margin="0,0,0,8" ToolTip="Shown in the list at the top, for example NAS"/>
+                    <TextBlock Grid.Row="1" Text="SSH login" VerticalAlignment="Center" Margin="0,0,0,8"/>
+                    <Grid Grid.Row="1" Grid.Column="1" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="70"/></Grid.ColumnDefinitions>
+                        <TextBox x:Name="TxtMLogin" Style="{StaticResource Field}" ToolTip="user@address, for example admin@192.168.0.10"/>
+                        <TextBlock Grid.Column="1" Text="port" VerticalAlignment="Center" Margin="8,0,6,0" Foreground="{StaticResource SoftInk}"/>
+                        <TextBox x:Name="TxtMPort" Grid.Column="2" Style="{StaticResource Field}" ToolTip="Leave empty for 22"/>
+                    </Grid>
+                    <TextBlock Grid.Row="2" Text="Compose folder" VerticalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBox x:Name="TxtMFolder" Grid.Row="2" Grid.Column="1" Style="{StaticResource Field}" Margin="0,0,0,8"
+                             ToolTip="The full path of the folder on that machine that holds the compose file and .env, for example /volume1/docker"/>
+                    <TextBlock Grid.Row="3" Text=".env comes from" VerticalAlignment="Center" Margin="0,0,0,8"/>
+                    <Grid Grid.Row="3" Grid.Column="1" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="120"/></Grid.ColumnDefinitions>
+                        <ComboBox x:Name="CmbMEnv" VerticalContentAlignment="Center"
+                                  ToolTip="The Env_ file next to your compose file that Send copies to the machine as .env"/>
+                        <TextBlock Grid.Column="1" Text="project" VerticalAlignment="Center" Margin="8,0,6,0" Foreground="{StaticResource SoftInk}"/>
+                        <TextBox x:Name="TxtMProject" Grid.Column="2" Style="{StaticResource Field}"
+                                 ToolTip="The compose project name the containers were started with there (Test connection lists them). Empty uses the folder's name"/>
+                    </Grid>
+                    <TextBlock Grid.Row="4" Text="Docker command" VerticalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBox x:Name="TxtMDocker" Grid.Row="4" Grid.Column="1" Style="{StaticResource Field}" Margin="0,0,0,8"
+                             ToolTip="Usually docker (the app also looks in /usr/local/bin, where Synology keeps it)"/>
+                    <TextBlock Grid.Row="5" Text="Web pages on" VerticalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBox x:Name="TxtMWeb" Grid.Row="5" Grid.Column="1" Style="{StaticResource Field}" Margin="0,0,0,8"
+                             ToolTip="The address used instead of localhost for web pages. Leave empty to use the SSH address"/>
+                    <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,4,0,0">
+                        <Button x:Name="BtnTestMachine" Content="Test connection" Tag="&#xE703;" Style="{StaticResource Btn}"/>
+                        <Button x:Name="BtnKeyHelp" Content="SSH key help" Tag="&#xE8D7;" Style="{StaticResource Btn}" Margin="0"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtMTest" Grid.Row="7" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{StaticResource SoftInk}"/>
+                </Grid>
+            </Border>
+        </Grid>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button x:Name="BtnSaveMachines" Content="Save" Tag="&#xE74E;" Style="{StaticResource PrimaryBtn}" IsDefault="True"/>
+            <Button x:Name="BtnCancelMachines" Content="Cancel" Style="{StaticResource Btn}" IsCancel="True" Margin="0"/>
+        </StackPanel>
+    </StackPanel>
+</Window>
+'@
+
+function Get-MachineFormValues {
+    $f = $script:MachinesForm
+    return [ordered]@{
+        Name = $f.TxtMName.Text.Trim(); Login = $f.TxtMLogin.Text.Trim(); Port = $f.TxtMPort.Text.Trim()
+        Folder = $f.TxtMFolder.Text.Trim().TrimEnd('/'); Project = $f.TxtMProject.Text.Trim().ToLowerInvariant(); EnvFile = $(if ($f.CmbMEnv.SelectedIndex -gt 0) { [string]$f.CmbMEnv.SelectedItem } else { '' })
+        Docker = $(if ($f.TxtMDocker.Text.Trim()) { $f.TxtMDocker.Text.Trim() } else { 'docker' }); WebHost = $f.TxtMWeb.Text.Trim()
+    }
+}
+
+# Copies the form into the selected machine (the list keeps working copies until Save).
+function Save-MachineForm {
+    $f = $script:MachinesForm
+    if ($f.Loading -or $f.Current -lt 0 -or $f.Current -ge $f.List.Count) { return }
+    $f.List[$f.Current] = Get-MachineFormValues
+    $label = if ($f.List[$f.Current].Name) { $f.List[$f.Current].Name } else { '(new machine)' }
+    if ([string]$f.LstMachines.Items[$f.Current] -ne $label) {
+        $sel = $f.LstMachines.SelectedIndex
+        $f.Loading = $true
+        $f.LstMachines.Items[$f.Current] = $label
+        $f.LstMachines.SelectedIndex = $sel
+        $f.Loading = $false
+    }
+}
+
+function Show-MachineForm {
+    $f = $script:MachinesForm
+    $f.Loading = $true
+    $i = $f.LstMachines.SelectedIndex
+    $f.Current = $i
+    $has = ($i -ge 0)
+    $f.MachineForm.IsEnabled = $has
+    $f.BtnRemoveMachine.IsEnabled = $has
+    $m = if ($has) { $f.List[$i] } else { [ordered]@{ Name = ''; Login = ''; Port = ''; Folder = ''; Project = ''; EnvFile = ''; Docker = 'docker'; WebHost = '' } }
+    $f.TxtMName.Text = $m.Name; $f.TxtMLogin.Text = $m.Login; $f.TxtMPort.Text = $m.Port; $f.TxtMFolder.Text = $m.Folder; $f.TxtMProject.Text = [string]$m.Project
+    $f.TxtMDocker.Text = $m.Docker; $f.TxtMWeb.Text = $m.WebHost
+    $f.CmbMEnv.SelectedIndex = 0
+    if ($m.EnvFile) {
+        if (-not $f.CmbMEnv.Items.Contains($m.EnvFile)) { [void]$f.CmbMEnv.Items.Add($m.EnvFile) }
+        $f.CmbMEnv.SelectedItem = $m.EnvFile
+    }
+    $f.TxtMTest.Text = ''
+    $f.Loading = $false
+}
+
+function Test-MachineValues($m, [object[]]$All) {
+    if (-not $m.Name) { return 'Give each machine a name.' }
+    if ($m.Name -eq 'This PC') { return "'This PC' is taken. Pick another name." }
+    if (@($All | Where-Object { $_.Name -eq $m.Name }).Count -gt 1) { return "Two machines are called $($m.Name)." }
+    if ($m.Login -notmatch '^[^\s@]+@[^\s@]+$') { return "$($m.Name): SSH login should look like user@address." }
+    if ($m.Port -and ($m.Port -notmatch '^\d+$' -or [int]$m.Port -lt 1 -or [int]$m.Port -gt 65535)) { return "$($m.Name): the port is a number from 1 to 65535." }
+    if ($m.Folder -notmatch '^/') { return "$($m.Name): Compose folder is the full path on that machine, starting with /, for example /volume1/docker." }
+    if ($m.Project -and $m.Project -notmatch '^[a-z0-9][a-z0-9_-]*$') { return "$($m.Name): the project name uses lower-case letters, numbers, - and _." }
+    if ($m.Docker -match '[;&|`$<>]') { return "$($m.Name): Docker command should be a program path such as /usr/local/bin/docker." }
+    return ''
+}
+
+function Show-Machines {
+    $w = New-XamlObject $machinesXaml
+    $w.Owner = $window
+    if ($window.Icon) { $w.Icon = $window.Icon }
+    $f = @{ Window = $w; Loading = $false; Current = -1; List = (New-Object System.Collections.ArrayList); TestRunner = $null; TestTimer = $null }
+    foreach ($n in 'LstMachines', 'BtnAddMachine', 'BtnRemoveMachine', 'MachineForm', 'TxtMName', 'TxtMLogin', 'TxtMPort', 'TxtMFolder', 'TxtMProject', 'CmbMEnv', 'TxtMDocker', 'TxtMWeb',
+        'BtnTestMachine', 'BtnKeyHelp', 'TxtMTest', 'BtnSaveMachines') { $f[$n] = $w.FindName($n) }
+    $script:MachinesForm = $f
+    [void]$f.CmbMEnv.Items.Add('(leave .env as it is)')
+    if ($script:ComposeDir) { foreach ($t in @(Get-ChildItem -LiteralPath $script:ComposeDir -Filter 'Env_*' -File -ErrorAction SilentlyContinue)) { [void]$f.CmbMEnv.Items.Add($t.Name) } }
+    foreach ($m in @($script:Settings.Machines)) {
+        $copy = [ordered]@{}
+        foreach ($k in $m.Keys) { $copy[$k] = $m[$k] }
+        [void]$f.List.Add($copy)
+        [void]$f.LstMachines.Items.Add($m.Name)
+    }
+    $f.LstMachines.Add_SelectionChanged({ $f = $script:MachinesForm; if ($f.Loading) { return }; Save-MachineForm; Show-MachineForm })
+    foreach ($n in 'TxtMName', 'TxtMLogin', 'TxtMPort', 'TxtMFolder', 'TxtMProject', 'TxtMDocker', 'TxtMWeb') { $f[$n].Add_TextChanged({ Save-MachineForm }) }
+    $f.CmbMEnv.Add_SelectionChanged({ Save-MachineForm })
+    $f.BtnAddMachine.Add_Click({
+            $f = $script:MachinesForm
+            Save-MachineForm
+            $pick = @($f.CmbMEnv.Items | Where-Object { $_ -match '^Env_' } | Select-Object -First 1)
+            [void]$f.List.Add([ordered]@{ Name = ''; Login = ''; Port = ''; Folder = ''; Project = ''; EnvFile = $(if ($pick.Count) { [string]$pick[0] } else { '' }); Docker = 'docker'; WebHost = '' })
+            [void]$f.LstMachines.Items.Add('(new machine)')
+            $f.LstMachines.SelectedIndex = $f.List.Count - 1
+            [void]$f.TxtMName.Focus()
+        })
+    $f.BtnRemoveMachine.Add_Click({
+            $f = $script:MachinesForm
+            $i = $f.LstMachines.SelectedIndex
+            if ($i -lt 0) { return }
+            $f.Loading = $true
+            $f.List.RemoveAt($i)
+            $f.LstMachines.Items.RemoveAt($i)
+            $f.Current = -1
+            $f.Loading = $false
+            $f.LstMachines.SelectedIndex = [Math]::Min($i, $f.List.Count - 1)
+            Show-MachineForm
+        })
+    $f.BtnKeyHelp.Add_Click({
+            $f = $script:MachinesForm
+            $m = Get-MachineFormValues
+            $login = if ($m.Login) { $m.Login } else { 'user@address' }
+            $port = if ($m.Port) { " -p $($m.Port)" } else { '' }
+            $text = "The app signs in with an SSH key, so it never asks for a password. Set one up once:`n`n" +
+            "1. In PowerShell on this PC, make a key (press Enter at each question):`n     ssh-keygen -t ed25519`n`n" +
+            "2. Copy it to the machine (type that machine's password once):`n     type `$env:USERPROFILE\.ssh\id_ed25519.pub | ssh$port $login `"mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys`"`n`n" +
+            "3. Press Test connection.`n`n" +
+            "Synology: turn on SSH in Control Panel > Terminal & SNMP, turn on the user home service in Control Panel > User & Group > Advanced, and use an administrator account. If Test says permission denied for docker, run once on the NAS: sudo synogroup --add docker <your user>, then sudo chown root:docker /var/run/docker.sock.`n`n" +
+            "This text has been copied to the clipboard."
+            try { [Windows.Clipboard]::SetText($text) } catch { Write-Verbose 'Clipboard busy.' }
+            [void][Windows.MessageBox]::Show($f.Window, $text, 'SSH key help', 'OK', 'Information')
+        })
+    $f.BtnTestMachine.Add_Click({
+            $f = $script:MachinesForm
+            $m = Get-MachineFormValues
+            $problem = Test-MachineValues $m @($m)
+            if ($problem) { $f.TxtMTest.Text = $problem; return }
+            $ssh = Find-Ssh
+            if (-not $ssh) { $f.TxtMTest.Text = "ssh.exe wasn't found. Turn on the OpenSSH Client in Windows Settings > System > Optional features."; return }
+            if ($f.TestRunner) { $f.TestRunner.Kill() }
+            $d = $m.Docker
+            $file = if ($script:ComposePath) { [IO.Path]::GetFileName($script:ComposePath) } else { 'docker-compose.yml' }
+            $cmd = (Get-RemotePathPrefix) + $d + " version --format 'engine {{.Server.Version}}' && " + $d + " compose version --short && if [ -f " + (ConvertTo-ShQuote ($m.Folder + '/' + $file)) + " ]; then echo 'compose file: found'; else echo 'compose file: not there yet (use Send)'; fi && if [ -f " + (ConvertTo-ShQuote ($m.Folder + '/.env')) + " ]; then echo '.env: found'; else echo '.env: not there yet'; fi" + '; echo running projects: $(' + $d + ' ps --format ''{{.Label "com.docker.compose.project"}}'' | sort | uniq -c | tr -s '' '' | tr ''\n'' '','')'
+            $f.TxtMTest.Text = "Connecting to $($m.Login)..."
+            try { $f.TestRunner = New-Object Dcm.Runner($ssh, [string[]](@(Get-SshArguments $m) + @($cmd)), $env:USERPROFILE, $true) }
+            catch { $f.TxtMTest.Text = "Couldn't start ssh: $($_.Exception.Message)"; return }
+            $f.TestStarted = [DateTime]::Now
+            if (-not $f.TestTimer) {
+                $f.TestTimer = New-Object Windows.Threading.DispatcherTimer
+                $f.TestTimer.Interval = [TimeSpan]::FromMilliseconds(250)
+                $f.TestTimer.Add_Tick({
+                        $f = $script:MachinesForm
+                        if (-not $f -or -not $f.TestRunner) { $this.Stop(); return }
+                        $r = $f.TestRunner
+                        if (-not $r.IsDone) {
+                            if (([DateTime]::Now - $f.TestStarted).TotalSeconds -gt 30) { $r.Kill(); $f.TestRunner = $null; $f.TxtMTest.Text = 'No answer after 30 seconds.' }
+                            return
+                        }
+                        $f.TestRunner = $null
+                        $out = (($r.Output -split "`r?`n") | Where-Object { $_.Trim() }) -join '   ·   '
+                        if ($r.ExitCode -eq 0) { $f.TxtMTest.Text = "Connected. Docker $out" }
+                        else {
+                            $err = Get-FirstLines $r.Error 3
+                            $hint = if ($err -match 'Permission denied \(publickey') { ' The SSH key isn''t set up for this user yet: see SSH key help.' }
+                            elseif ($err -match 'permission denied.*docker\.sock') { ' This user isn''t allowed to use Docker: see SSH key help.' }
+                            elseif ($err -match 'not found') { ' Docker wasn''t found: try /usr/local/bin/docker as the Docker command.' }
+                            else { '' }
+                            $f.TxtMTest.Text = "Didn't work (exit code $($r.ExitCode)): $err $out$hint"
+                        }
+                    })
+            }
+            $f.TestTimer.Start()
+        })
+    $f.BtnSaveMachines.Add_Click({
+            $f = $script:MachinesForm
+            Save-MachineForm
+            $all = @($f.List)
+            foreach ($m in $all) {
+                $problem = Test-MachineValues $m $all
+                if ($problem) { [void][Windows.MessageBox]::Show($f.Window, $problem, 'Machines', 'OK', 'Warning'); return }
+            }
+            $old = Get-Machine
+            $script:Settings.Machines = @(foreach ($m in $all) { ConvertTo-Machine $m })
+            $now = @($script:Settings.Machines | Where-Object { $old -and $_.Name -eq $old.Name })
+            $f.Saved = $true
+            $f.Window.Close()
+            if ($old -and -not $now.Count) { Set-Machine '' }
+            elseif ($old -and (($now[0] | ConvertTo-Json -Compress) -ne ($old | ConvertTo-Json -Compress))) { Set-Machine $old.Name }
+            else { Save-Settings; Update-MachineList }
+        })
+    if ($f.List.Count) {
+        $cur = [string]$script:Settings.Machine
+        $idx = 0
+        for ($i = 0; $i -lt $f.List.Count; $i++) { if ($f.List[$i].Name -eq $cur) { $idx = $i } }
+        $f.LstMachines.SelectedIndex = $idx
+    }
+    Show-MachineForm
+    [void]$w.ShowDialog()
+    if ($f.TestRunner) { $f.TestRunner.Kill() }
+    if ($f.TestTimer) { $f.TestTimer.Stop() }
+    $script:MachinesForm = $null
+    Update-MachineList
+}
+
+# ---------------------------------------------------------------------------
 # Start
 # ---------------------------------------------------------------------------
 $window.Width = [Math]::Max(900, [int]$script:Settings.WindowWidth)
@@ -5281,7 +6020,7 @@ if ($window.Height -gt $work.Height) { $window.Height = $work.Height }
 if ($script:Settings.WindowMaximised) { $window.WindowState = 'Maximized' }
 
 $script:DockerExe = Find-Docker
-if (-not $script:DockerExe) { $script:DockerState = 'missing' }
+if (-not (Test-DockerReady)) { $script:DockerState = 'missing' }
 try { $script:Tray = New-Tray } catch { $script:Tray = $null; Write-Verbose "No tray icon: $($_.Exception.Message)" }
 
 Write-Activity "$script:AppName v$script:AppVersion"
@@ -5291,6 +6030,8 @@ Set-ViewMode $script:Settings.ViewMode
 Read-UpdateCache
 
 $startFile = if ($ComposeFile) { $ComposeFile } else { [string]$script:Settings.ComposeFile }
+Update-MachineList
+if (Get-Machine) { Write-Activity "Machine: $(Get-MachineName) ($((Get-Machine).Login))" }
 Update-RecentList
 if ($startFile -and (Test-Path -LiteralPath $startFile)) {
     Set-ComposeFile $startFile

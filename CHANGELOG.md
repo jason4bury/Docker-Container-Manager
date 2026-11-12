@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.03] - 2026-11-12
+
+### Added
+- **Machines.** A list at the top left switches between This PC and other machines that run the
+  same compose file (a Linux laptop, a VM, a Synology NAS). The app reaches them with Windows'
+  own `ssh.exe` and an SSH key, and runs every docker command there: status, start, stop,
+  update, logs, shell and disk usage. Web pages open on that machine's address.
+- **Machines window** to add, change and remove machines, with **Test connection** and
+  **SSH key help**.
+- **Progress window** while Docker starts, stops, updates or sends: the steps, a progress bar and
+  Docker's output, with Cancel. It closes itself 10 seconds after success (the Close button counts down) and stays open on
+  failure. Can be turned off in Settings.
+- **Project** name per machine, for stacks started under another name (Synology Container
+  Manager uses the project's name). Test connection lists the running projects.
+- **Send** copies the compose file and the machine's `Env_` file (as `.env`) to the machine,
+  after keeping dated `.bak` copies of the files already there. Nothing is restarted.
+
+### Changed
+- Works with Docker Compose before 2.24 (as on Synology), which lacks `--no-env-resolution`.
+- With another machine picked, Configure and the **.env** button use that machine's `Env_` file,
+  and **Save and recreate** sends it before recreating.
+
 ## [1.02] - 2026-11-12
 
 ### Added

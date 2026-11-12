@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.02-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.03-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -23,6 +23,7 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **Logs window** with follow, timestamps, search, copy and save.
 - **Check compose file**: finds broken `${...}` variables, spacing mistakes (tabs, uneven indents, a setting indented into the wrong section, a missing space after `:` or `-`), host ports used twice, duplicate names, `depends_on` pointing at nothing, values missing from `.env`, missing folders, services without a group, unpinned images and passwords written in the file. Double-click a result to open the file at that line. The header button shows how many errors and warnings there are.
 - **Activity log** showing every docker command it runs and what Docker said, with Cancel.
+- **Progress window** while containers start, stop or update, with Docker's output as it happens. It closes itself 10 seconds after the work succeeds, counting down on its Close button.
 - **Tray icon** with Start and Stop for each group.
 - **Helpful banners** when Docker isn't running (with **Start Docker Desktop**), when the compose file has an error (the last good list stays), or when a folder has `Env_*` templates but no `.env` yet.
 - **Configure** a container: change its environment variables, API keys and passwords, move values written in the compose file into `.env`, add new variables, and open its host folders, a shell inside it, its web page or logs. **Save and recreate** restarts it with the new values.
@@ -30,6 +31,7 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **Disk usage**: how much space images, containers, volumes and the build cache take, which containers use each image, and one-click clean-up of old images, the build cache, unused networks and (after listing them and asking twice) unused volumes.
 - **Tidy spacing**: re-indents the compose file to two spaces per level, and only saves it when Docker reads the result exactly the same as before.
 - **List or cards**, **dark mode**, **app icons** and a **colour for each group**.
+- **Other machines**: manage the same compose file on a Linux laptop, a VM or a Synology NAS over SSH, from the machine list at the top. **Send** copies the compose file and that machine's `Env_` file (as `.env`) across.
 - Only changes the compose file or `.env` when you save in a Configure window or tidy the spacing, and backs both up first. Nothing is installed; settings are in `%APPDATA%`. The exe is self-contained.
 
 ## 🖼️ Screenshots
@@ -41,12 +43,13 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 ## 📋 Requirements
 
 - Windows 10 or 11 with Windows PowerShell 5.1 (or PowerShell 7).
+- For other machines: the Windows OpenSSH Client (installed by default on Windows 10 1809 and later) and Docker with Compose v2 on the machine.
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or another Docker engine that `docker.exe` can reach) with Compose v2.20 or later.
 - A `docker-compose.yml` (or `compose.yaml`).
 
 ## 📦 Installation
 
-**Exe:** download `Docker Container Manager v1.02.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
+**Exe:** download `Docker Container Manager v1.03.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
 
 **Script:** clone this repo and run `Start Docker Container Manager.cmd`. It starts `src\Docker-Container-Manager.ps1` with the execution policy bypassed for that run only.
 
@@ -123,13 +126,35 @@ Adding or changing a label counts as a change to the service, so the app marks i
 
 ### Settings
 
-**Settings** in the header sets the label prefix, how often the status is checked (15 seconds by default, 30 when the window is in the tray), the editor for **Edit** and **.env** (Visual Studio Code at `C:\Program Files\Microsoft VS Code\code.exe` by default, Notepad when it's empty or not found), whether Update removes unused images, whether stopping a group asks first, whether minimising hides the window in the tray instead of the taskbar (off by default), the theme (System, Light or Dark), whether app icons are shown and whether to check for newer images when the app starts.
+**Settings** in the header sets the label prefix, how often the status is checked (15 seconds by default, 30 when the window is in the tray), the editor for **Edit** and **.env** (Visual Studio Code at `C:\Program Files\Microsoft VS Code\code.exe` by default, Notepad when it's empty or not found), whether Update removes unused images, whether stopping a group asks first, whether minimising hides the window in the tray instead of the taskbar (off by default), the theme (System, Light or Dark), whether app icons are shown, whether to check for newer images when the app starts, and whether to show the progress window.
 
 Downloaded icons are kept in `%LOCALAPPDATA%\Docker Container Manager\Icons` and the last update check in `%APPDATA%\Docker Container Manager\updates.json`. Icon downloads send only the icon name (for example `sonarr.png`) to the jsDelivr CDN; turn icons off in Settings if you'd rather not.
 
 They are saved in `%APPDATA%\Docker Container Manager\settings.json`, together with the compose file in use, the recent files list and the window size. Delete the file to start again.
 
 Start the exe (or the script) with `-ComposeFile "<path>"` to open a particular compose file.
+
+### Other machines
+
+The list at the top left switches between **This PC** and other machines that run the same compose file. Pick **Machines...** in it to add one:
+
+| Field | Meaning |
+| --- | --- |
+| Name | What the list shows, for example `NAS`. |
+| SSH login and port | `user@address`, and the SSH port if it isn't 22. |
+| Compose folder | The folder on that machine that holds the compose file and `.env`, for example `/volume1/docker`. |
+| .env comes from | The `Env_` file next to your compose file that **Send** copies there as `.env` (for example `Env_Synology`). |
+| Project | The compose project name the containers were started with on that machine, if it isn't the folder's name (Synology Container Manager uses the project's name). **Test connection** lists the running projects. |
+| Docker command | Usually `docker`. The app also looks in `/usr/local/bin`, where Synology keeps it. |
+| Web pages on | The address used instead of `localhost` for web pages (the SSH address if empty). |
+
+The app uses Windows' own `ssh.exe` with an SSH key, so it never asks for or stores a password. **SSH key help** in the Machines window shows the one-time setup, and **Test connection** checks it.
+
+With a machine picked, every docker command (status, start, stop, update, logs, shell, disk usage) runs on that machine, against the compose file in its folder. The compose file on this PC stays the master:
+
+- **Send** backs up the compose file and `.env` on the machine (as dated `.bak` copies), then copies your compose file and the machine's `Env_` file there. Nothing is restarted; services whose settings changed show **Changed**, and **Apply changes** recreates them.
+- **Configure** saves values to the machine's `Env_` file on this PC, and **Save and recreate** sends it before recreating.
+- **Tidy spacing** and **Check** work on the file on this PC.
 
 ## 📝 Changelog
 
