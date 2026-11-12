@@ -1,0 +1,11 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Windows scripts keep CRLF on checkout (batch files can misbehave with LF)
+*.ps1  text eol=crlf
+*.psd1 text eol=crlf
+*.cmd  text eol=crlf
+
+# Binary assets
+*.ico binary
+*.png binary

@@ -1,0 +1,20 @@
+# Builds live in ..\Builds\, outside the repo. Safety net in case one lands here.
+*.exe
+*.bundle.ps1
+
+# Local config, logs and temp files (settings live in %APPDATA%\Docker Container Manager)
+config.local.json
+settings.json
+*.log
+*.tmp
+
+# Compose secrets, in case a real compose project is copied in for testing
+.env
+
+# Windows clutter
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+*.swp

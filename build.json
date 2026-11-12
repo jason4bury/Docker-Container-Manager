@@ -1,0 +1,13 @@
+{
+  "AppName": "Docker Container Manager",
+  "EntryScript": "src\\Docker-Container-Manager.ps1",
+  "Icon": "assets\\Docker-Container-Manager.ico",
+  "Side": "Home",
+  "Description": "PowerShell/WPF tool for running and organising Docker Compose containers",
+  "EmbedAssets": ["assets\\Docker-Container-Manager.ico", "assets\\Docker-Container-Manager.png"],
+  "IncludeFiles": [],
+  "Ps2exe": {
+    "STA": true,
+    "NoConsole": true
+  }
+}

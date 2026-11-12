@@ -1,0 +1,92 @@
+# Demo compose project for trying Docker Container Manager and for the README
+# screenshots. Small public images only. Start it from this folder with:
+#   docker compose up -d
+# and remove it again with:
+#   docker compose down
+name: dcm-demo
+
+services:
+  website:
+    image: nginx:1.27-alpine
+    container_name: dcm-website
+    labels:
+      - home.group=Websites
+      - home.description=Static website served by nginx
+    ports:
+      - 18080:80
+    restart: unless-stopped
+
+  whoami:
+    image: traefik/whoami:v1.10
+    container_name: dcm-whoami
+    labels:
+      - home.group=Websites
+    ports:
+      - 18081:80
+    restart: unless-stopped
+
+  blog:
+    image: nginx:1.27-alpine
+    container_name: dcm-blog
+    labels:
+      - home.group=Websites
+    ports:
+      - 18082:80
+    restart: unless-stopped
+
+  cache:
+    image: redis:7.4-alpine
+    container_name: dcm-cache
+    labels:
+      - home.group=Databases
+    restart: unless-stopped
+
+  database:
+    image: postgres:16-alpine
+    container_name: dcm-database
+    labels:
+      - home.group=Databases
+    environment:
+      - POSTGRES_PASSWORD=${DEMO_DB_PASSWORD:-demo-only}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:4
+    container_name: dcm-adminer
+    labels:
+      - home.group=Databases
+      - home.description=Database admin page
+    depends_on:
+      - database
+    ports:
+      - 18083:8080
+    restart: unless-stopped
+
+  uptime:
+    image: traefik/whoami:v1.10
+    container_name: dcm-uptime
+    labels:
+      - home.group=Monitoring
+    ports:
+      - 18084:80
+    restart: unless-stopped
+
+  broken:
+    image: busybox:1.36
+    container_name: dcm-broken
+    labels:
+      - home.group=Monitoring
+      - home.description=Exits with an error on purpose, to show a problem
+    command: ["sh", "-c", "echo 'Starting...'; sleep 2; echo 'Config file not found' >&2; exit 1"]
+    restart: "no"
+
+  scratchpad:
+    image: busybox:1.36
+    container_name: dcm-scratchpad
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
