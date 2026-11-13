@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.06] - 2026-11-13
+
+### Added
+- **Source page** for each container (**Source** button, right-click menu): opens its project page from a `home.source` label,
+  your own source links file (`source-links.txt` in the settings folder, kept on this PC), the image's own source label or a
+  guess from the image name (GitHub, GitLab, Docker Hub). The tooltip shows the page. **Edit source links...** in the menu and Settings.
+- **Export...**: saves the list as one self-contained web page (HTML) with icons, states, web pages, source pages and notes,
+  in the app's light or dark theme (with a switch at the top of the page) and ready to print. It can save only the containers shown.
+- **Help** (button and F1): a guide to the whole app, with selectable text and a link to the README.
+
 ## [1.05] - 2026-11-13
 
 ### Added

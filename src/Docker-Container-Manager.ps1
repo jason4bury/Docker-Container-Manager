@@ -29,10 +29,10 @@
     Opens the window with the last compose file used.
 
 .EXAMPLE
-    "Docker Container Manager v1.05.exe" -ComposeFile "D:\Docker\docker-compose.yml"
+    "Docker Container Manager v1.06.exe" -ComposeFile "D:\Docker\docker-compose.yml"
 
 .NOTES
-    Version:   1.05 (keep in step with CHANGELOG.md)
+    Version:   1.06 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -44,7 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.05'
+$script:AppVersion = '1.06'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 
 #region BUNDLE-ASSETS
@@ -240,6 +240,7 @@ namespace Dcm {
         public bool   UpdateAvailable { get { return B("UpdateAvailable"); } set { SetValue("UpdateAvailable", value); } }
         public string ColorLabel    { get { return S("ColorLabel"); }    set { SetValue("ColorLabel", value); } }
         public string IconLabel     { get { return S("IconLabel"); }     set { SetValue("IconLabel", value); } }
+        public string SourceLabel   { get { return S("SourceLabel"); }   set { SetValue("SourceLabel", value); } }
         public string IconKey       { get { return S("IconKey"); }       set { SetValue("IconKey", value); } }
         public string GroupColor    { get { string c = S("GroupColor"); return c.Length > 0 ? c : "#97A3B3"; } set { SetValue("GroupColor", value); } }
         public string Initial       { get { string s = S("Service"); return s.Length > 0 ? s.Substring(0, 1).ToUpperInvariant() : "?"; } }
@@ -610,14 +611,14 @@ function Get-FirstLines([string]$Text, [int]$Count = 3) {
 # Starts a quick docker query. $OnDone gets an object with ExitCode, Output and
 # Error once docker has finished (or straight away if docker can't be started).
 function Start-DockerCall {
-    param([string[]]$Arguments, [scriptblock]$OnDone, [switch]$Compose, [switch]$Local)
+    param([string[]]$Arguments, [scriptblock]$OnDone, [switch]$Compose, [switch]$Local, [object]$Tag)
     $full = if ($Compose) { @(Get-ComposeArguments -Local:$Local) + $Arguments } else { $Arguments }
     try {
         $runner = New-DockerRunner $full $true -Local:$Local
-        [void]$script:Calls.Add(@{ Runner = $runner; OnDone = $OnDone; Started = [DateTime]::Now })
+        [void]$script:Calls.Add(@{ Runner = $runner; OnDone = $OnDone; Started = [DateTime]::Now; Tag = $Tag })
     } catch {
         $fail = [pscustomobject]@{ ExitCode = -1; Output = ''; Error = $_.Exception.Message }
-        & $OnDone $fail
+        & $OnDone $fail $Tag
     }
 }
 
@@ -634,7 +635,8 @@ function Update-Calls {
         } else {
             $res = [pscustomobject]@{ ExitCode = $r.ExitCode; Output = $r.Output; Error = $r.Error }
         }
-        try { & $call.OnDone $res } catch { Write-Activity "Internal error: $($_.Exception.Message)" }
+        # Tag is whatever the caller passed in (for example the row a lookup is for).
+        try { & $call.OnDone $res $call.Tag } catch { Write-Activity "Internal error: $($_.Exception.Message)" }
     }
 }
 
@@ -1099,6 +1101,7 @@ $mainXaml = @'
                     <Button x:Name="BtnFolder" Content="Folder" Tag="&#xE8B7;" Style="{DynamicResource HeaderBtn}"
                             ToolTip="Open the compose file's folder"/>
                     <Button x:Name="BtnSettings" Content="Settings" Tag="&#xE713;" Style="{DynamicResource HeaderBtn}"/>
+                    <Button x:Name="BtnHelp" Content="Help" Tag="&#xE897;" Style="{DynamicResource HeaderBtn}" ToolTip="How to use the app (F1)"/>
                     <Button x:Name="BtnAbout" Content="About" Tag="&#xE946;" Style="{DynamicResource HeaderBtn}" Margin="0,3,0,3"/>
                 </WrapPanel>
             </Grid>
@@ -1230,6 +1233,7 @@ $mainXaml = @'
                         <Button x:Name="BtnConfigure" Content="Configure" Tag="&#xE713;" Style="{DynamicResource Btn}"
                                 ToolTip="Environment variables, API keys and passwords, host folders and a shell for the selected container (Ctrl+E)"/>
                         <Button x:Name="BtnLogs" Content="Logs" Tag="&#xE9F9;" Style="{DynamicResource Btn}" ToolTip="Show the logs of the selected container (Ctrl+L)"/>
+                        <Button x:Name="BtnSource" Content="Source" Tag="&#xE71B;" Style="{DynamicResource Btn}" ToolTip="Open the selected container's project page (GitHub, GitLab or Docker Hub)"/>
                         <Button x:Name="BtnOpen" Content="Open" Tag="&#xE774;" Style="{DynamicResource Btn}" ToolTip="Open the selected container's web page (Enter)" Margin="0"/>
                     </WrapPanel>
                 </Grid>
@@ -1258,6 +1262,7 @@ $mainXaml = @'
                                     ToolTip="Remove these containers. Their data folders are not touched."/>
                             <Button x:Name="BtnCheckUpdates" Content="Check for updates" Tag="&#xE895;" Style="{DynamicResource Btn}"
                                     ToolTip="Ask each image's registry whether a newer image is out. Nothing is downloaded."/>
+                            <Button x:Name="BtnExport" Content="Export..." Tag="&#xEDE1;" Style="{DynamicResource Btn}" ToolTip="Save the list as a web page (HTML) to keep, print or send"/>
                             <Button x:Name="BtnRefresh" Content="Refresh" Tag="&#xE72C;" Style="{DynamicResource Btn}" Margin="0" ToolTip="Read the compose file and status again (F5)"/>
                         </WrapPanel>
                     </Grid>
@@ -1425,7 +1430,9 @@ $mainXaml = @'
                                     <MenuItem x:Name="MnuConfigure" Header="Configure..."/>
                                     <MenuItem x:Name="MnuLogs" Header="Logs"/>
                                     <MenuItem x:Name="MnuOpen" Header="Open web page"/>
+                                    <MenuItem x:Name="MnuSource" Header="Source page"/>
                                     <MenuItem x:Name="MnuCopy" Header="Copy name"/>
+                                    <MenuItem x:Name="MnuSourceList" Header="Edit source links..." ToolTip="Your own list of project pages, kept on this PC"/>
                                     <Separator/>
                                     <MenuItem x:Name="MnuRemove" Header="Remove container..."/>
                                 </ContextMenu>
@@ -1594,11 +1601,11 @@ $mainXaml = @'
 
 $window = New-XamlObject $mainXaml
 $ui = @{}
-foreach ($name in 'ImgLogo', 'HeaderTitle', 'HeaderButtons', 'TxtSubtitle', 'TxtProject', 'CmbMachine', 'BtnSend', 'CmbRecent', 'PnlRecent', 'TxtRecentCaption', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnDisk', 'BtnFolder', 'BtnSettings', 'BtnAbout',
+foreach ($name in 'ImgLogo', 'HeaderTitle', 'HeaderButtons', 'TxtSubtitle', 'TxtProject', 'CmbMachine', 'BtnSend', 'CmbRecent', 'PnlRecent', 'TxtRecentCaption', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnDisk', 'BtnFolder', 'BtnSettings', 'BtnHelp', 'BtnAbout',
     'Banner', 'BannerGlyph', 'BannerText', 'CmbEnvTemplate', 'BannerAction', 'BannerRetry',
-    'LstGroups', 'TxtSearch', 'SearchHint', 'CmbState', 'BtnView', 'BtnPortainer', 'BtnStart', 'BtnStop', 'BtnRestart', 'BtnUpdate', 'BtnConfigure', 'BtnLogs', 'BtnOpen',
-    'TxtGroupName', 'TxtGroupInfo', 'BtnAutoGroup', 'BtnApply', 'BtnGroupStart', 'BtnGroupStop', 'BtnGroupUpdate', 'BtnRemoveOrphans', 'BtnCheckUpdates', 'BtnRefresh',
-    'Grid', 'Cards', 'TxtEmpty', 'RowMenu', 'MnuStart', 'MnuStop', 'MnuRestart', 'MnuUpdate', 'MnuRecreate', 'MnuConfigure', 'MnuLogs', 'MnuOpen', 'MnuCopy', 'MnuRemove',
+    'LstGroups', 'TxtSearch', 'SearchHint', 'CmbState', 'BtnView', 'BtnPortainer', 'BtnStart', 'BtnStop', 'BtnRestart', 'BtnUpdate', 'BtnConfigure', 'BtnLogs', 'BtnSource', 'BtnOpen',
+    'TxtGroupName', 'TxtGroupInfo', 'BtnAutoGroup', 'BtnApply', 'BtnGroupStart', 'BtnGroupStop', 'BtnGroupUpdate', 'BtnRemoveOrphans', 'BtnCheckUpdates', 'BtnExport', 'BtnRefresh',
+    'Grid', 'Cards', 'TxtEmpty', 'RowMenu', 'MnuStart', 'MnuStop', 'MnuRestart', 'MnuUpdate', 'MnuRecreate', 'MnuConfigure', 'MnuLogs', 'MnuOpen', 'MnuSource', 'MnuCopy', 'MnuSourceList', 'MnuRemove',
     'LogRow', 'LogSplitter', 'LogPane', 'BtnLogCopy', 'BtnLogClear', 'TxtLog', 'TxtStatus', 'PrgBusy', 'TxtBusy', 'BtnCancel', 'ChkActivity') {
     $ui[$name] = $window.FindName($name)
 }
@@ -2527,6 +2534,7 @@ function Import-ComposeConfig($Config, [hashtable]$Hashes) {
             $colour = if ($labels.ContainsKey("$prefix.color")) { $labels["$prefix.color"].Trim() } else { '' }
             $row.ColorLabel = if ($colour -and (Test-Colour $colour)) { $colour } else { '' }
             $row.IconLabel = if ($labels.ContainsKey("$prefix.icon")) { $labels["$prefix.icon"].Trim() } else { '' }
+            $row.SourceLabel = if ($labels.ContainsKey("$prefix.source")) { $labels["$prefix.source"].Trim() } else { '' }
             $row.ConfigHash = if ($Hashes.ContainsKey($name)) { $Hashes[$name] } else { '' }
             Update-RowNote $row
         }
@@ -2931,6 +2939,8 @@ function Update-SelectionButtons {
     $ui.BtnConfigure.IsEnabled = ($sel.Count -eq 1 -and $sel[0].InCompose)
     $ui.BtnLogs.IsEnabled = ($sel.Count -eq 1 -and $sel[0].HasContainer)
     $ui.BtnOpen.IsEnabled = ($sel.Count -eq 1 -and $sel[0].HasUrl)
+    $ui.BtnSource.IsEnabled = ($sel.Count -eq 1)
+    $ui.BtnSource.ToolTip = Get-SourceHint $(if ($sel.Count -eq 1) { $sel[0] } else { $null })
 }
 
 # ---------------------------------------------------------------------------
@@ -5209,6 +5219,7 @@ $settingsXaml = @'
             </Grid>
         </Border>
         <TextBlock x:Name="TxtWhere" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap" Margin="2,10,0,0"/>
+        <Button x:Name="BtnSourceLinks" Content="Edit source links..." Style="{StaticResource LinkBtn}" HorizontalAlignment="Left" Margin="2,4,0,0" ToolTip="Your own list of project pages for the Source button, kept on this PC (source-links.txt)"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
             <Button x:Name="BtnSaveSettings" Content="Save" Tag="&#xE74E;" Style="{StaticResource PrimaryBtn}" IsDefault="True"/>
             <Button x:Name="BtnCancelSettings" Content="Cancel" Style="{StaticResource Btn}" IsCancel="True" Margin="0"/>
@@ -5220,7 +5231,7 @@ $settingsXaml = @'
 function Update-PrefixHelp {
     $p = $script:SettingsForm.TxtPrefix.Text.Trim().TrimEnd('.')
     if (-not $p) { $p = 'home' }
-    $script:SettingsForm.TxtPrefixHelp.Text = "Groups come from the $p.group label. $p.url sets a container's web page ($p.url=none hides it), $p.description its tooltip, $p.icon its icon and $p.color its group's colour."
+    $script:SettingsForm.TxtPrefixHelp.Text = "Groups come from the $p.group label. $p.url sets a container's web page ($p.url=none hides it), $p.description its tooltip, $p.icon its icon, $p.color its group's colour and $p.source its source page."
 }
 
 function Show-Settings {
@@ -5229,6 +5240,7 @@ function Show-Settings {
     if ($window.Icon) { $w.Icon = $window.Icon }
     $f = @{ Window = $w; Saved = $false }
     foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'CmbTheme', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'ChkIcons', 'ChkUpdates', 'ChkProgress', 'ChkFinished', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
+    $w.FindName('BtnSourceLinks').Add_Click({ Edit-SourceList })
     $script:SettingsForm = $f
     $f.TxtPrefix.Text = $script:Settings.LabelPrefix
     $f.TxtRefresh.Text = [string]$script:Settings.RefreshSeconds
@@ -5294,6 +5306,11 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.06' = @(
+        'Source page: right-click a container (or press Source) to open its project page on GitHub, GitLab or Docker Hub. Your own list of links (Edit source links) is kept on this PC.',
+        'Export: saves the list as one web page (HTML) to keep, print or send, with icons, states, web pages and source pages. It uses the app''s light or dark theme, with a switch at the top of the page.',
+        'Help (F1): a guide to every part of the app, with the text you can select and copy.'
+    )
     '1.05' = @(
         'Group automatically: suggests a group for each container without one, from its image name. You check and change the list before anything is saved, and the compose file is backed up first.',
         'Portainer button: opens Portainer on the chosen machine, starts it when it''s stopped, or installs it (shows the docker run line and asks first). Right-click it to update Portainer or change its data folder.',
@@ -5922,6 +5939,513 @@ function Complete-AutoGroups($Res) {
 }
 
 # ---------------------------------------------------------------------------
+# Source pages: a container's project page (GitHub, GitLab, Docker Hub).
+# Found from, in order: a <prefix>.source label, your own list (a text file in
+# the settings folder, kept on this PC only), the image's own
+# org.opencontainers.image.source label, then a guess from the image name.
+# ---------------------------------------------------------------------------
+$script:SourcesPath = Join-Path $script:SettingsDir 'source-links.txt'
+$script:SourceList = $null
+$script:SourceCache = @{}   # machine|image -> the image's own source label ('' when it has none)
+
+function ConvertTo-SourceKey([string]$Text) { return ([string]$Text).ToLowerInvariant() -replace '[^a-z0-9]', '' }
+
+# https://github.com/linuxserver/docker-firefox -> firefox
+function Get-SourceUrlKey([string]$Url) {
+    $m = [regex]::Match($Url, '^https?://(?:www\.)?(?:github\.com|gitlab\.com)/[^/]+/([^/?#]+)')
+    if (-not $m.Success) { return '' }
+    return ConvertTo-SourceKey ($m.Groups[1].Value -replace '^docker-', '' -replace '\.git$', '')
+}
+
+# Reads the list again only when the file has changed.
+function Read-SourceList {
+    $p = $script:SourcesPath
+    if (-not (Test-Path -LiteralPath $p)) { $script:SourceList = @{ Stamp = $null; Map = @{} }; return }
+    $stamp = (Get-Item -LiteralPath $p).LastWriteTimeUtc
+    if ($script:SourceList -and $script:SourceList.Stamp -eq $stamp) { return }
+    $map = @{}
+    foreach ($line in [IO.File]::ReadAllLines($p)) {
+        $t = $line.Trim()
+        if (-not $t -or $t.StartsWith('#')) { continue }
+        $m = [regex]::Match($t, '^(.*?)[\s=|,;]*(https?://\S+)\s*$')
+        if (-not $m.Success) { continue }
+        $url = $m.Groups[2].Value
+        foreach ($k in @((ConvertTo-SourceKey $m.Groups[1].Value), (Get-SourceUrlKey $url))) {
+            if ($k -and -not $map.ContainsKey($k)) { $map[$k] = $url }
+        }
+    }
+    $script:SourceList = @{ Stamp = $stamp; Map = $map }
+}
+
+# The words a list entry is matched against: the image's name and the service's name.
+function Get-SourceKeys([Dcm.Row]$Row) {
+    $keys = New-Object System.Collections.ArrayList
+    $parts = Get-ImageParts $Row.Image
+    if ($parts) { [void]$keys.Add((ConvertTo-SourceKey ((($parts.Repo -split '/')[-1]) -replace '^docker-', ''))) }
+    [void]$keys.Add((ConvertTo-SourceKey $Row.Service))
+    [void]$keys.Add((ConvertTo-SourceKey $Row.ContainerName))
+    return @($keys | Where-Object { $_ } | Select-Object -Unique)
+}
+
+function Get-GuessedSource([string]$Image) {
+    $p = Get-ImageParts $Image
+    if (-not $p) { return '' }
+    $repo = $p.Repo
+    $parts = $repo -split '/'
+    $name = $parts[-1]
+    if ($p.Registry -eq 'ghcr.io' -and $parts.Count -ge 2) { return "https://github.com/$($parts[0])/$($parts[1])" }
+    if ($p.Registry -eq 'registry.gitlab.com' -and $parts.Count -ge 2) { return "https://gitlab.com/$($parts[0])/$($parts[1])" }
+    if (($p.Registry -eq 'lscr.io' -or $p.Registry -eq 'docker.io') -and $parts[0] -eq 'linuxserver') { return "https://github.com/linuxserver/docker-$name" }
+    if ($p.Registry -eq 'docker.io') {
+        if ($parts[0] -eq 'library') { return "https://hub.docker.com/_/$name" }
+        return "https://hub.docker.com/r/$repo"
+    }
+    return ''
+}
+
+# The page found without asking Docker: the label, then your list, then what an
+# earlier lookup of the image found. Url is '' when the label says none.
+function Get-SourcePage([Dcm.Row]$Row) {
+    $label = ([string]$Row.SourceLabel).Trim()
+    if ($label -eq 'none') { return @{ Url = ''; From = "the $($script:Settings.LabelPrefix).source label" } }
+    if ($label -match '^https?://') { return @{ Url = $label; From = "the $($script:Settings.LabelPrefix).source label" } }
+    Read-SourceList
+    foreach ($k in (Get-SourceKeys $Row)) {
+        if ($script:SourceList.Map.ContainsKey($k)) { return @{ Url = $script:SourceList.Map[$k]; From = 'your source links list' } }
+    }
+    $ck = (Get-MachineName) + '|' + $Row.Image
+    if ($script:SourceCache.ContainsKey($ck) -and $script:SourceCache[$ck]) { return @{ Url = $script:SourceCache[$ck]; From = "the image's own label" } }
+    return $null
+}
+
+# What the Source page button and menu item will open, for their tooltips.
+function Get-SourceHint([Dcm.Row]$Row) {
+    if (-not $Row) { return 'Open the selected container''s project page (GitHub, GitLab or Docker Hub)' }
+    $s = Get-SourcePage $Row
+    if ($s -and -not $s.Url) { return "Hidden by the $($script:Settings.LabelPrefix).source label" }
+    if ($s) { return "Opens $($s.Url)" }
+    $ck = (Get-MachineName) + '|' + $Row.Image
+    $guess = Get-GuessedSource $Row.Image
+    if ($script:SourceCache.ContainsKey($ck)) { if ($guess) { return "Opens $guess" } else { return 'No source page known for this image' } }
+    if ($guess) { return "Asks Docker for the image's own source page first, otherwise opens $guess" }
+    return 'Asks Docker for the image''s own source page'
+}
+
+function Open-SourceUrl([string]$Url, [Dcm.Row]$Row, [string]$From) {
+    Write-Activity "Source page of $($Row.Service): $Url (from $From)"
+    try { Start-Process -FilePath $Url } catch { Set-Status "Couldn't open $Url" }
+}
+
+function Open-SourcePage([Dcm.Row]$Row) {
+    if (-not $Row) { return }
+    $s = Get-SourcePage $Row
+    if ($s -and -not $s.Url) { Set-Status "The $($script:Settings.LabelPrefix).source label hides the source page of $($Row.Service)."; return }
+    if ($s) { Open-SourceUrl $s.Url $Row $s.From; return }
+    # Most images name their source in a label of their own; ask Docker before guessing.
+    $ck = (Get-MachineName) + '|' + $Row.Image
+    if ($script:SourceCache.ContainsKey($ck) -or -not $Row.Image -or -not (Test-DockerReady)) { Complete-SourceLookup $null $Row; return }
+    Set-Status "Looking up the source page of $($Row.Service)..."
+    Start-DockerCall -Arguments @('image', 'inspect', '--format', '{{index .Config.Labels "org.opencontainers.image.source"}}', $Row.Image) -Tag $Row -OnDone { param($res, $row) Complete-SourceLookup $res $row }
+}
+
+function Complete-SourceLookup($Res, [Dcm.Row]$Row) {
+    $row = $Row
+    if (-not $row) { return }
+    Set-Status ''
+    $url = ''
+    if ($Res -and $Res.ExitCode -eq 0) {
+        $url = ((([string]$Res.Output).Trim() -split "`r?`n")[0]).Trim() -replace '\.git$', ''
+        if ($url -notmatch '^https?://') { $url = '' }
+        # Remember the answer (also "none"), so the image is asked about once.
+        $script:SourceCache[(Get-MachineName) + '|' + $row.Image] = $url
+    }
+    if ($url) { Open-SourceUrl $url $row "the image's own label"; return }
+    $guess = Get-GuessedSource $row.Image
+    if ($guess) { Open-SourceUrl $guess $row 'a guess from the image name'; return }
+    Set-Status "No source page found for $($row.Service). Add it to your source links (right-click > Edit source links)."
+}
+
+function Edit-SourceList {
+    $p = $script:SourcesPath
+    if (-not (Test-Path -LiteralPath $p)) {
+        if (-not (Test-Path -LiteralPath $script:SettingsDir)) { New-Item -ItemType Directory -Path $script:SettingsDir -Force | Out-Null }
+        $text = @(
+            '# Source links for Docker Container Manager. This file stays on this PC.',
+            '# One page per line: a name, a | and the page''s address, for example:',
+            '#   Sonarr | https://github.com/Sonarr/Sonarr',
+            '# The name (or the project name in a GitHub or GitLab address) is matched to the image, service or container name.',
+            '# Capitals, spaces, dashes, dots and underscores don''t matter. Lines starting with # are ignored.',
+            '') -join "`r`n"
+        [IO.File]::WriteAllText($p, $text, (New-Object Text.UTF8Encoding $false))
+    }
+    Open-InEditor $p
+}
+
+# ---------------------------------------------------------------------------
+# Export: the list as a web page (one HTML file, no other files needed).
+# ---------------------------------------------------------------------------
+function ConvertTo-HtmlText([string]$Text) { return [Net.WebUtility]::HtmlEncode([string]$Text) }
+
+# Web pages on another machine are on that machine, not on this PC.
+function Get-ShownUrl([string]$Url) {
+    $m = Get-Machine
+    if ($m -and $Url) { return ($Url -replace '^(?i)(https?://)(localhost|127\.0\.0\.1)(?=[:/]|$)', ('${1}' + (Get-MachineHost $m))) }
+    return $Url
+}
+
+# A cached icon as a data: address, so the page needs no other files.
+function Get-IconDataUri([Dcm.Row]$Row) {
+    $p = [string]$Row.IconKey
+    if (-not $p -or -not (Test-Path -LiteralPath $p -PathType Leaf)) { return '' }
+    try {
+        $f = Get-Item -LiteralPath $p
+        if ($f.Length -gt 300kb) { return '' }
+        $type = switch -Regex ($f.Extension.ToLowerInvariant()) { '\.jpe?g' { 'image/jpeg' } '\.gif' { 'image/gif' } '\.ico' { 'image/x-icon' } '\.bmp' { 'image/bmp' } default { 'image/png' } }
+        return "data:$type;base64," + [Convert]::ToBase64String([IO.File]::ReadAllBytes($p))
+    } catch { return '' }
+}
+
+function New-ExportHtml([object[]]$Rows, [string]$Scope) {
+    $rows = @($Rows)
+    $running = @($rows | Where-Object IsRunning).Count
+    $problems = @($rows | Where-Object Problem).Count
+    $changed = @($rows | Where-Object Changed).Count
+    $updates = @($rows | Where-Object UpdateAvailable).Count
+    $title = if ($script:ProjectName) { "$script:ProjectName - Docker containers" } else { 'Docker containers' }
+    $sb = New-Object Text.StringBuilder
+    $add = { param($s) [void]$sb.Append($s) }
+    & $add @'
+<!DOCTYPE html>
+<html lang="en" class="%THEME%">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+'@
+    & $add "<title>$(ConvertTo-HtmlText $title)</title>`n"
+    & $add @'
+<style>
+/* The app's theme picks the colours: html.light, html.dark, or html.auto (follows the browser).
+   The switch at the top (a checkbox, no scripts) shows the other one. */
+.page, html.dark .flip:checked ~ .page { --page:#f4f6f9; --card:#ffffff; --ink:#1b2430; --soft:#5d6b7c; --edge:#dde3ea; --accent:#1a73d9; --ok:#2da44e; --bad:#cf222e; --off:#97a3b3; --warn:#b07a00; }
+html.dark .page, html.light .flip:checked ~ .page, html.auto .flip:checked ~ .page { --page:#161b22; --card:#1f2630; --ink:#e6edf3; --soft:#9aa7b4; --edge:#30363d; --accent:#4c9bea; --ok:#3fb950; --bad:#f85149; --off:#6e7681; --warn:#e3b341; }
+@media (prefers-color-scheme: dark) { html.auto .page { --page:#161b22; --card:#1f2630; --ink:#e6edf3; --soft:#9aa7b4; --edge:#30363d; --accent:#4c9bea; --ok:#3fb950; --bad:#f85149; --off:#6e7681; --warn:#e3b341; } html.auto .flip:checked ~ .page { --page:#f4f6f9; --card:#ffffff; --ink:#1b2430; --soft:#5d6b7c; --edge:#dde3ea; --accent:#1a73d9; --ok:#2da44e; --bad:#cf222e; --off:#97a3b3; --warn:#b07a00; } }
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+.page { min-height: 100vh; padding: 24px; background: var(--page); color: var(--ink); }
+.flip { position: absolute; opacity: 0; pointer-events: none; }
+.flipper { position: fixed; top: 10px; right: 14px; z-index: 5; background: var(--card); color: var(--ink); border: 1px solid var(--edge); border-radius: 14px; padding: 3px 12px; font-size: 12px; cursor: pointer; user-select: none; }
+.flip:focus-visible ~ .page .flipper { outline: 2px solid var(--accent); }
+header { background: linear-gradient(90deg, #12325a, #1e5fa8); color: #fff; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; }
+header h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
+header p { margin: 0; color: #cfe0f5; overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.chip { background: var(--card); border: 1px solid var(--edge); border-radius: 8px; padding: 8px 14px; }
+.chip b { font-size: 18px; display: block; }
+section { background: var(--card); border: 1px solid var(--edge); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+h2 { margin: 0 0 8px; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+h2 .bar { width: 5px; height: 18px; border-radius: 3px; }
+h2 small { color: var(--soft); font-weight: 400; }
+.wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 900px; }
+th:nth-child(1) { width: 24px; } th:nth-child(2) { width: 20%; } th:nth-child(3) { width: 10%; } th:nth-child(4) { width: 11%; }
+th:nth-child(5) { width: 8%; } th:nth-child(6) { width: 17%; } th:nth-child(7) { width: 19%; }
+td { overflow-wrap: anywhere; }
+th { text-align: left; color: var(--soft); font-weight: 600; border-bottom: 1px solid var(--edge); padding: 6px 8px; white-space: nowrap; }
+td { padding: 6px 8px; border-bottom: 1px solid var(--edge); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--off); }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+.st.ok { color: var(--ok); } .st.bad { color: var(--bad); } .st.off { color: var(--soft); }
+.name { font-weight: 600; } .desc, .soft { color: var(--soft); font-size: 12px; }
+.ico { width: 20px; height: 20px; vertical-align: middle; margin-right: 6px; object-fit: contain; }
+.note { color: var(--warn); }
+a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+footer { color: var(--soft); font-size: 12px; margin-top: 18px; }
+@media print {
+  .page { --page:#ffffff !important; --card:#ffffff !important; --ink:#000000 !important; --soft:#444444 !important; --edge:#cccccc !important; --accent:#1a73d9 !important; --ok:#2da44e !important; --bad:#cf222e !important; --off:#97a3b3 !important; --warn:#b07a00 !important; padding: 0; }
+  body { font-size: 11px; }
+  .flipper { display: none; }
+  header, .dot, h2 .bar { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  section { break-inside: avoid; }
+  a { color: inherit; }
+}
+</style>
+</head>
+<body>
+<input type="checkbox" id="flip" class="flip" aria-label="Switch between light and dark">
+<div class="page">
+<label for="flip" class="flipper" title="Switch between light and dark">&#9680; Light / dark</label>
+'@
+    $machine = Get-MachineName
+    $where = if ($script:ComposePath) { Get-ComposeDisplay } else { '' }
+    $project = if ($script:ProjectName) { "project $script:ProjectName &middot; " } else { '' }
+    & $add ("<header><h1>{0}</h1><p>{1}</p><p>Containers on {2} &middot; {3}{4} containers{5} &middot; exported {6} by {7} v{8}</p></header>`n" -f (ConvertTo-HtmlText $title), (ConvertTo-HtmlText $where), (ConvertTo-HtmlText $machine), $project, $rows.Count, $(if ($Scope) { ' (' + (ConvertTo-HtmlText $Scope) + ')' } else { '' }), (ConvertTo-HtmlText ((Get-Date).ToString('d MMMM yyyy HH:mm'))), (ConvertTo-HtmlText $script:AppName), $script:AppVersion)
+    & $add '<div class="chips">'
+    foreach ($c in @(@('Running', $running), @('Stopped', ($rows.Count - $running)), @('Need a look', $problems), @('Changed', $changed), @('Newer image', $updates))) {
+        & $add ('<div class="chip"><b>{0}</b>{1}</div>' -f $c[1], (ConvertTo-HtmlText $c[0]))
+    }
+    & $add "</div>`n"
+    foreach ($g in @($rows | Group-Object { $_.GroupSort } | Sort-Object Name)) {
+        $items = @($g.Group | Sort-Object Service)
+        $gname = $items[0].Group
+        $up = @($items | Where-Object IsRunning).Count
+        & $add ("<section><h2><span class=""bar"" style=""background:{0}""></span>{1} <small>{2} of {3} running</small></h2>`n" -f (ConvertTo-HtmlText $items[0].GroupColor), (ConvertTo-HtmlText $gname), $up, $items.Count)
+        & $add "<div class=""wrap""><table><thead><tr><th></th><th>Container</th><th>State</th><th>Since</th><th>Web page</th><th>Image</th><th>Source</th><th>Note</th></tr></thead><tbody>`n"
+        foreach ($r in $items) {
+            $dot = if ($r.Problem) { 'bad' } elseif ($r.IsRunning) { 'ok' } else { '' }
+            $st = if ($dot) { $dot } else { 'off' }
+            $icon = Get-IconDataUri $r
+            $img = if ($icon) { "<img class=""ico"" alt="""" src=""$icon"">" } else { '' }
+            $desc = if ($r.Description) { "<div class=""desc"">$(ConvertTo-HtmlText $r.Description)</div>" } else { '' }
+            $url = Get-ShownUrl $r.Url
+            $web = if ($url -match '^https?://') { "<a href=""$(ConvertTo-HtmlText $url)"">$(ConvertTo-HtmlText $(if ($r.Ports) { $r.Ports } else { 'open' }))</a>" } else { "<span class=""soft"">$(ConvertTo-HtmlText $r.Ports)</span>" }
+            $src = Get-SourcePage $r
+            $srcUrl = if ($src) { $src.Url } else { Get-GuessedSource $r.Image }
+            $srcCell = if ($srcUrl) { "<a href=""$(ConvertTo-HtmlText $srcUrl)"">$(ConvertTo-HtmlText (($srcUrl -replace '^https?://(www\.)?', '') -replace '/$', ''))</a>" } else { '' }
+            & $add ("<tr><td><span class=""dot {0}""></span></td><td>{1}<span class=""name"">{2}</span>{3}</td><td class=""st {4}"">{5}</td><td>{6}</td><td>{7}</td><td>{8}</td><td>{9}</td><td class=""note"">{10}</td></tr>`n" -f $dot, $img, (ConvertTo-HtmlText $r.Service), $desc, $st, (ConvertTo-HtmlText $r.StateText), (ConvertTo-HtmlText $r.Since), $web, (ConvertTo-HtmlText $r.Image), $srcCell, (ConvertTo-HtmlText $r.Note))
+        }
+        & $add "</tbody></table></div></section>`n"
+    }
+    & $add ("<footer>Made with {0} v{1}</footer>`n</div>`n</body>`n</html>`n" -f (ConvertTo-HtmlText $script:AppName), $script:AppVersion)
+    # The theme setting, not the colours loaded at start, so a theme just changed in Settings is used.
+    $mode = switch ([string]$script:Settings.Theme) { 'Light' { 'light' } 'Dark' { 'dark' } default { 'auto' } }
+    return $sb.ToString().Replace('%THEME%', $mode)
+}
+
+function Export-List {
+    if (-not $script:Rows.Count) { Set-Status 'There is nothing in the list to export yet.'; return }
+    # The rows the list shows now (group, state filter and search), or all of them.
+    $shown = @($script:View | Where-Object { $_ -is [Dcm.Row] })
+    $rows = @($script:Rows)
+    $scope = ''
+    if ($shown.Count -and $shown.Count -lt $rows.Count) {
+        $q = "Export only the $($shown.Count) container(s) the list shows now?`n`nYes: only those (the group, filter and search you picked).`nNo: all $($rows.Count) containers."
+        $a = [Windows.MessageBox]::Show($window, $q, 'Export', 'YesNoCancel', 'Question')
+        if ($a -eq 'Cancel') { return }
+        if ($a -eq 'Yes') { $rows = $shown; $scope = 'the ones shown' }
+    }
+    $dlg = New-Object Microsoft.Win32.SaveFileDialog
+    $dlg.Title = 'Export the list as a web page'
+    $dlg.Filter = 'Web page (*.html)|*.html'
+    $base = if ($script:ProjectName) { $script:ProjectName } else { 'containers' }
+    $dlg.FileName = ('{0} containers {1}.html' -f $base, (Get-Date).ToString('yyyy-MM-dd')) -replace '[\\/:*?"<>|]', '-'
+    $dlg.InitialDirectory = [Environment]::GetFolderPath('MyDocuments')
+    if (-not $dlg.ShowDialog($window)) { return }
+    try { [IO.File]::WriteAllText($dlg.FileName, (New-ExportHtml $rows $scope), (New-Object Text.UTF8Encoding $false)) }
+    catch { [void][Windows.MessageBox]::Show($window, "Couldn't save the file: $($_.Exception.Message)", $script:AppName, 'OK', 'Error'); return }
+    Write-Activity "Exported $($rows.Count) container(s) to $($dlg.FileName)"
+    if ([Windows.MessageBox]::Show($window, "Saved $($dlg.FileName)`n`nOpen it in your browser now?", 'Export', 'YesNo', 'Question') -eq 'Yes') {
+        try { Start-Process -FilePath $dlg.FileName } catch { Set-Status "Couldn't open $($dlg.FileName)" }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Help window (Help button or F1): topics on the left, the text on the right.
+# A line starting with "- " is a bullet; "## " starts a small heading.
+# ---------------------------------------------------------------------------
+$script:HelpTopics = [ordered]@{
+    'Getting started' = @(
+        'Docker Container Manager runs the containers in a Docker Compose file (docker-compose.yml) and shows how each one is doing.',
+        '- Press Compose file... and pick your docker-compose.yml. Next time the app opens the same file.',
+        '- Pick a group on the left, or All containers.',
+        '- Select one or more containers (Ctrl+click, Shift+click or Ctrl+A) and use the buttons above the list.',
+        'Everything the app does is a normal docker command, listed with what Docker said in the Activity log at the bottom.',
+        'To try it out safely, open docs\demo\docker-compose.yml from the app''s folder and press Start all.'
+    )
+    'The lists at the top' = @(
+        '## Containers on',
+        'Which computer''s Docker the app shows and controls: This PC, or another machine (a Linux laptop, a VM, a Synology NAS) reached over SSH. Machines... in this list adds or changes them.',
+        '## Compose file',
+        'The compose file on this PC that the app reads. Each machine remembers the file you last used with it.',
+        'With another machine picked, the box reads Send from: that machine runs its own copy of the file, and the file here is the master copy. Send copies it across.'
+    )
+    'Groups and labels' = @(
+        'Groups come from labels in the compose file, so they travel with the file:',
+        '- home.group: the group a container is listed under. Without it, it''s under Ungrouped.',
+        '- home.url: its web page (home.url=none hides the link). Without it, the first published port is used.',
+        '- home.description: the tooltip in the list.',
+        '- home.icon and home.color: its icon, and its group''s colour.',
+        '- home.source: its source page (GitHub, GitLab and so on).',
+        'The home part can be changed in Settings. Adding or changing a label marks the container Changed until you press Apply changes.'
+    )
+    'The list and cards' = @(
+        'Each container shows a dot for its state, its name and icon, the state, how long it''s been up or down, its web page, its image and a note when something needs doing (for example Changed, or a newer image).',
+        '- Cards (or Ctrl+T) switches between the list and cards; each card has start, stop, configure and logs buttons.',
+        '- The box next to Search shows only running, stopped, problem, changed or updatable containers.',
+        '- Search finds containers by name, image, group or port.',
+        '- Groups on the left show how many are running, with a red dot when something in the group needs a look.',
+        'The list is checked again every few seconds, and whenever the compose file or .env is saved.'
+    )
+    'Right-click menu' = @(
+        'Right-click one or more containers for:',
+        '- Start, Stop and Restart,',
+        '- Update (download the newest image and recreate) and Recreate (make the container again from the compose file),',
+        '- Configure, Logs, Open web page and Source page,',
+        '- Copy name, and Edit source links (your own list of project pages),',
+        '- Remove container: stops and deletes the container. Its image, volumes and data folders are kept, and Start makes it again.'
+    )
+    'Logs' = @(
+        'Logs (Ctrl+L) opens a window with the selected container''s log. Several can be open at once.',
+        '- Follow keeps showing new lines as they come.',
+        '- Search, copy and save the log from the window.'
+    )
+    'Starting, stopping and updating' = @(
+        '- Start creates the containers if needed and starts them (docker compose up -d).',
+        '- Stop and Restart do what they say. Stopped containers keep their data.',
+        '- Update downloads the newest image and recreates the container on it. Stopped ones stay stopped.',
+        '- Start all, Stop all and Update all in the bar above the list work on the whole group (or everything, after asking).',
+        '- Right-click a container for Recreate, Copy name, Source page and Remove container.',
+        'Changed means the compose file says something different from the running container. Apply changes recreates those containers; their data in volumes and folders is kept.'
+    )
+    'Other machines and Send' = @(
+        'Pick a machine in Containers on and every docker command runs there over SSH, using that machine''s copy of the compose file.',
+        '- Machines... sets the SSH login, the folder with the compose file, the Env_ file to send as .env, and Portainer''s data folder.',
+        '- SSH key help shows the one-time setup; Test connection checks it.',
+        '- Send backs up the files on the machine, then copies your compose file (and the Env_ file as .env) there. Nothing restarts; press Apply changes afterwards.',
+        '## The usual routine for a NAS',
+        '- Pick the NAS in Containers on.',
+        '- Edit the master copy on this PC (Edit, or Configure).',
+        '- Press Send, then Apply changes.'
+    )
+    'Configure' = @(
+        'Configure (Ctrl+E) shows a container''s settings from the compose file and .env: environment variables, API keys and passwords.',
+        '- Change a value and press Save, or Save and recreate to use it straight away.',
+        '- Values written in the compose file can be moved to .env, which is the safer place for passwords.',
+        '- It also opens the container''s host folders, a shell inside it, its web page and its logs.',
+        'Both files are backed up before anything is saved.'
+    )
+    'Check, Disk and updates' = @(
+        '- Check finds mistakes in the compose file: spacing, ${...} variables, ports used twice, missing folders and more. Double-click a result to open the file at that line. Tidy spacing fixes the indents, and only saves when Docker reads the file the same.',
+        '- Disk shows how much space images, containers, volumes and the build cache use, with buttons to clear what isn''t needed.',
+        '- Check for updates asks each image''s registry whether a newer image is out, without downloading anything. Containers with one show a note, and the Updates available filter lists them.'
+    )
+    'Group automatically' = @(
+        'When some containers have no group, the bar above the list shows Group automatically. It suggests a group for each one from its image name, reusing the groups already in your file.',
+        '- Change any group, type a new one, or clear it to leave that container ungrouped.',
+        '- Save groups adds one label line to each of them (after a backup) and changes nothing else.',
+        '- The containers then show Changed until you press Apply changes. On another machine, press Send first.'
+    )
+    'Portainer' = @(
+        'The Portainer button works on the machine picked in Containers on:',
+        '- Running: opens Portainer on port 9000.',
+        '- Stopped: starts it, then opens it.',
+        '- Not installed: asks for its data folder, shows the docker run line and asks before installing it.',
+        'Right-click the button to update Portainer (keeping its data) or change its data folder. Portainer Business asks for its licence key in its own page; the app never sees or keeps it.'
+    )
+    'Source pages' = @(
+        'Right-click a container and pick Source page (or press Source) to open its project page on GitHub, GitLab or Docker Hub. The app looks, in order, at:',
+        '- a home.source label on the service,',
+        '- your own source links (right-click > Edit source links, or the link in Settings). It''s a text file, source-links.txt, in the settings folder and stays on this PC: one "Name | address" per line,',
+        '- the address the image itself names,',
+        '- a guess from the image name.',
+        'The Activity log says which page was opened and where it came from.'
+    )
+    'Export' = @(
+        'Export... in the bar above the list saves the list as one web page (HTML): every group with its containers, icon, state, web page, image, source page and notes. When a group, filter or search is picked, it asks whether to save only the containers shown.',
+        'The page uses the app''s theme (Light, Dark, or the browser''s setting for System), with a Light / dark switch at the top. It prints in light, has no scripts and needs no other files, so it can be kept or sent as it is.'
+    )
+    'Progress and the Finished box' = @(
+        'While Docker works, the progress window shows what it says. Hide closes the window; the work carries on.',
+        'If the progress window was hidden (or is turned off in Settings), a box in the bottom-right corner of the screen says when Docker has finished. Success closes itself after 10 seconds; a failure shows what went wrong, with Show log, and stays until it''s closed.'
+    )
+    'Keyboard shortcuts' = @(
+        '- F1: this help',
+        '- F5: read the compose file and status again',
+        '- Ctrl+F: search',
+        '- Ctrl+T: list or cards',
+        '- Ctrl+E: configure the selected container',
+        '- Ctrl+L: logs of the selected container',
+        '- Enter or double-click: open the selected container''s web page',
+        '- Ctrl+A: select everything; Esc: clear the search'
+    )
+    'Settings and files' = @(
+        'Settings sets the label prefix, how often the status is checked, the editor, the theme, the tray, app icons, update checks, the progress window and the Finished box.',
+        '- Settings (settings.json), your source links (source-links.txt) and backups of the compose file and .env (Backups) are in %APPDATA%\Docker Container Manager.',
+        '- Downloaded icons are in %LOCALAPPDATA%\Docker Container Manager\Icons.',
+        'Nothing is installed: delete that folder to start again.'
+    )
+}
+
+$helpXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Help" Width="940" Height="660" MinWidth="640" MinHeight="400" WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <DockPanel Margin="14">
+        <TextBlock DockPanel.Dock="Top" Text="Help" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10"/>
+        <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="More in the README: " Foreground="{StaticResource SoftInk}" VerticalAlignment="Center"/>
+                <Button x:Name="BtnHelpReadme" Style="{StaticResource LinkBtn}" VerticalAlignment="Center"/>
+            </StackPanel>
+            <Button x:Name="BtnHelpClose" Grid.Column="1" Content="Close" Style="{StaticResource PrimaryBtn}" IsCancel="True" Margin="0"/>
+        </Grid>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="230"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <ListBox x:Name="LstHelp" ScrollViewer.HorizontalScrollBarVisibility="Disabled" Margin="0,0,12,0" Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" Foreground="{StaticResource Ink}" Padding="2,4"/>
+            <Border Grid.Column="1" Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8">
+                <ScrollViewer x:Name="HelpScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="18,14">
+                    <StackPanel x:Name="HelpBody"/>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+    </DockPanel>
+</Window>
+'@
+
+function Show-HelpTopic {
+    $h = $script:HelpForm
+    if (-not $h) { return }
+    $topic = [string]$h.List.SelectedItem
+    if (-not $topic) { return }
+    $body = $h.Body
+    $body.Children.Clear()
+    $ink = $h.Window.FindResource('Ink')
+    $prefix = [string]$script:Settings.LabelPrefix
+    # Read-only text boxes, so the text can be selected and copied.
+    $new = {
+        param($Text, $Size, $Weight, $Margin)
+        $tb = New-Object Windows.Controls.TextBox
+        $tb.Text = $Text; $tb.IsReadOnly = $true; $tb.TextWrapping = 'Wrap'; $tb.BorderThickness = 0
+        $tb.Background = [Windows.Media.Brushes]::Transparent; $tb.Foreground = $ink; $tb.Padding = '0'
+        $tb.FontSize = $Size; $tb.FontWeight = $Weight; $tb.Margin = $Margin
+        [void]$body.Children.Add($tb)
+    }
+    & $new $topic 17 'SemiBold' '0,0,0,10'
+    foreach ($p in $script:HelpTopics[$topic]) {
+        $text = $p -replace '\bhome\.', "$prefix."
+        if ($text.StartsWith('## ')) { & $new $text.Substring(3) 13 'SemiBold' '0,6,0,4' }
+        elseif ($text.StartsWith('- ')) { & $new ([string][char]0x2022 + '  ' + $text.Substring(2)) 13 'Normal' '10,0,0,6' }
+        else { & $new $text 13 'Normal' '0,0,0,10' }
+    }
+    $h.Scroll.ScrollToTop()
+}
+
+function Show-Help([string]$Topic) {
+    if ($script:HelpForm) {
+        $script:HelpForm.Window.Activate() | Out-Null
+        if ($Topic) { $script:HelpForm.List.SelectedItem = $Topic }
+        return
+    }
+    $w = New-XamlObject $helpXaml
+    $w.Owner = $window
+    if ($window.Icon) { $w.Icon = $window.Icon }
+    $h = @{ Window = $w; List = $w.FindName('LstHelp'); Body = $w.FindName('HelpBody'); Scroll = $w.FindName('HelpScroll') }
+    foreach ($t in $script:HelpTopics.Keys) { [void]$h.List.Items.Add($t) }
+    $readme = $w.FindName('BtnHelpReadme')
+    $readme.Content = ($script:RepoUrl -replace '^https://', '') + '#readme'
+    $readme.Add_Click({ try { Start-Process -FilePath ($script:RepoUrl + '#readme') } catch { Set-Status "Couldn't open $script:RepoUrl" } })
+    $script:HelpForm = $h
+    $h.List.Add_SelectionChanged({ Show-HelpTopic })
+    $w.FindName('BtnHelpClose').Add_Click({ if ($script:HelpForm) { $script:HelpForm.Window.Close() } })
+    $w.Add_Closed({ $script:HelpForm = $null })
+    $h.List.SelectedItem = if ($Topic -and $script:HelpTopics.Contains($Topic)) { $Topic } else { @($script:HelpTopics.Keys)[0] }
+    $w.Show()
+}
+
+# ---------------------------------------------------------------------------
 # Tray icon
 # ---------------------------------------------------------------------------
 function Show-MainWindow {
@@ -6195,6 +6719,8 @@ $ui.RowMenu.Add_Opened({
         $ui.MnuConfigure.IsEnabled = ($sel.Count -eq 1 -and $sel[0].InCompose)
         $ui.MnuLogs.IsEnabled = ($sel.Count -eq 1 -and $sel[0].HasContainer)
         $ui.MnuOpen.IsEnabled = ($sel.Count -eq 1 -and $sel[0].HasUrl)
+        $ui.MnuSource.IsEnabled = ($sel.Count -eq 1)
+        $ui.MnuSource.ToolTip = if ($sel.Count -eq 1) { Get-SourceHint $sel[0] } else { $null }
         $ui.MnuCopy.IsEnabled = ($sel.Count -gt 0)
         $ui.MnuRemove.IsEnabled = (@($sel | Where-Object HasContainer).Count -gt 0)
     })
@@ -6208,11 +6734,17 @@ $ui.MnuLogs.Add_Click({ $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Show-Lo
 $ui.MnuOpen.Add_Click({ $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Open-Url $sel[0].Url } })
 $ui.MnuCopy.Add_Click({ $names = @(Get-SelectedRows | ForEach-Object Service); if ($names.Count) { [Windows.Clipboard]::SetText($names -join "`r`n") } })
 $ui.MnuRemove.Add_Click({ Invoke-Remove (Get-SelectedRows) })
+$ui.MnuSource.Add_Click({ $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Open-SourcePage $sel[0] } })
+$ui.MnuSourceList.Add_Click({ Edit-SourceList })
+$ui.BtnSource.Add_Click({ $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Open-SourcePage $sel[0] } })
+$ui.BtnExport.Add_Click({ Export-List })
+$ui.BtnHelp.Add_Click({ Show-Help })
 
 $window.Add_PreviewKeyDown({
         param($s, $e)
         $ctrl = ([Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Control)
         if ($e.Key -eq 'F5') { Request-ConfigLoad; $script:NextPoll = [DateTime]::MinValue; $e.Handled = $true }
+        elseif ($e.Key -eq 'F1') { Show-Help; $e.Handled = $true }
         elseif ($ctrl -and $e.Key -eq 'F') { [void]$ui.TxtSearch.Focus(); $ui.TxtSearch.SelectAll(); $e.Handled = $true }
         elseif ($ctrl -and $e.Key -eq 'E') { $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Show-Configure $sel[0] }; $e.Handled = $true }
         elseif ($ctrl -and $e.Key -eq 'L') { $sel = Get-SelectedRows; if ($sel.Count -eq 1) { Show-Logs $sel[0] }; $e.Handled = $true }

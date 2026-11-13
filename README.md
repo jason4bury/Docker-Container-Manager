@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.05-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.06-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -33,6 +33,9 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **Disk usage**: how much space images, containers, volumes and the build cache take, which containers use each image, and one-click clean-up of old images, the build cache, unused networks and (after listing them and asking twice) unused volumes.
 - **Tidy spacing**: re-indents the compose file to two spaces per level, and only saves it when Docker reads the result exactly the same as before.
 - **List or cards**, **dark mode**, **app icons** and a **colour for each group**.
+- **Source page**: right-click a container (or press **Source**) to open its project page on GitHub, GitLab or Docker Hub, from a label, your own list of links, the image itself or a guess from its name.
+- **Export**: saves the list as one web page (HTML) to keep, print or send.
+- **Help** (F1): a guide to every part of the app inside it.
 - **Portainer**: one button opens Portainer on the chosen machine, starts it when it's stopped, or installs it after showing the `docker run` line.
 - **Other machines**: manage the same compose file on a Linux laptop, a VM or a Synology NAS over SSH, from the machine list at the top. **Send** copies the compose file and that machine's `Env_` file (as `.env`) across.
 - Only changes the compose file or `.env` when you save in a Configure window, tidy the spacing or save groups, and backs both up first. Nothing is installed; settings are in `%APPDATA%`. The exe is self-contained.
@@ -52,7 +55,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-**Exe:** download `Docker Container Manager v1.05.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
+**Exe:** download `Docker Container Manager v1.06.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
 
 **Script:** clone this repo and run `Start Docker Container Manager.cmd`. It starts `src\Docker-Container-Manager.ps1` with the execution policy bypassed for that run only.
 
@@ -78,6 +81,7 @@ To try it without your own containers, open `docs\demo\docker-compose.yml` and p
 
 | Key | Does |
 | --- | --- |
+| F1 | Help |
 | F5 | Read the compose file and status again |
 | Ctrl+F | Search by name, image, group or port |
 | Ctrl+E | Configure the selected container |
@@ -124,6 +128,7 @@ services:
 | `home.description` | Tooltip for the service in the list. |
 | `home.icon` | The service's icon: a name from [dashboard-icons](https://github.com/homarr-labs/dashboard-icons) (`home.icon=jellyfin`), a web address of a PNG, or a picture file (relative to the compose file). Without it the icon is found from the image name. |
 | `home.color` | The colour of the service's group, as `#RRGGBB` or a colour name (`home.color=#2DA44E`). One service per group is enough. |
+| `home.source` | The service's source page (`home.source=https://github.com/...`), opened by **Source**. `home.source=none` hides it. |
 
 Adding or changing a label counts as a change to the service, so the app marks it **Changed** and **Apply changes** recreates it once.
 
@@ -173,6 +178,32 @@ With a machine picked, every docker command (status, start, stop, update, logs, 
 - **Send** backs up the compose file and `.env` on the machine (as dated `.bak` copies), then copies your compose file and the machine's `Env_` file there. Nothing is restarted; services whose settings changed show **Changed**, and **Apply changes** recreates them.
 - **Configure** saves values to the machine's `Env_` file on this PC, and **Save and recreate** sends it before recreating.
 - **Tidy spacing** and **Check** work on the file on this PC.
+
+### Source pages
+
+**Source** (and **Source page** in the right-click menu) opens the selected container's project page. The app looks, in order, at:
+
+1. a `home.source` label on the service (`none` hides the page),
+2. your own source links: `%APPDATA%\Docker Container Manager\source-links.txt`, a text file that stays on your PC. **Edit source links...** (right-click menu, or Settings) opens it,
+3. the address the image itself gives (its `org.opencontainers.image.source` label, asked once per image on the machine you picked),
+4. a guess from the image name: `ghcr.io/owner/name` on GitHub, `registry.gitlab.com/group/name` on GitLab, linuxserver images on GitHub, anything else on Docker Hub.
+
+The source links file has one page per line, a name, a `|` and the address:
+
+```text
+Sonarr | https://github.com/Sonarr/Sonarr
+Uptime Kuma | https://github.com/louislam/uptime-kuma
+```
+
+The name (or the project name in a GitHub or GitLab address) is matched to the image, service or container name; capitals, spaces, dashes, dots and underscores don't matter. The button's tooltip shows the page it will open, and the Activity log says where it came from.
+
+### Export
+
+**Export...** in the bar above the list saves the list as one web page: a section for each group with its colour, and for each container its icon, state, how long, web page, image, source page and note. When a group, filter or search is picked, it asks whether to save only the containers shown. The page uses the app's theme (Light or Dark; with System it follows the browser), with a **Light / dark** switch at the top. It prints in light and has no scripts or other files, so it can be kept or sent as it is.
+
+### Help
+
+**Help** in the header (or F1) opens a guide inside the app: the lists at the top, groups and labels, the list and cards, the right-click menu, Configure, Check, Disk, Logs, other machines, Group automatically, Portainer, source pages, export, the keys and where the files are kept. The text can be selected and copied.
 
 ### Portainer
 
