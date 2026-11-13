@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.07-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.08-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -30,7 +30,7 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **Helpful banners** when Docker isn't running (with **Start Docker Desktop**), when the compose file has an error (the last good list stays), or when a folder has `Env_*` templates but no `.env` yet.
 - **Configure** a container: change its environment variables, API keys and passwords, move values written in the compose file into `.env`, add new variables, and open its host folders, a shell inside it, its web page or logs. **Save and recreate** restarts it with the new values.
 - **Check for updates**: shows which containers have a newer image on Docker Hub, GHCR, lscr.io and other registries, without downloading anything. It also checks on its own when the app starts (at most every 12 hours).
-- **Disk usage**: how much space images, containers, volumes and the build cache take, which containers use each image, and one-click clean-up of old images, the build cache, unused networks and (after listing them and asking twice) unused volumes.
+- **Disk usage**: how much space images, containers, volumes and the build cache take, which containers use each image, and a small clean-up button in each card next to the space it frees (old or unused images, the build cache, unused networks and, in red, after listing them and asking twice, unused volumes). Each button is off when there's nothing to free, and its tooltip says exactly what it runs.
 - **Tidy spacing**: re-indents the compose file to two spaces per level, and only saves it when Docker reads the result exactly the same as before.
 - **List or cards**, **dark mode**, **app icons** and a **colour for each group**.
 - **Source page**: right-click a container (or press **Source**) to open its project page on GitHub, GitLab or Docker Hub, from a label, your own list of links, the image itself or a guess from its name.
@@ -55,7 +55,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-**Exe:** download `Docker Container Manager v1.07.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
+**Exe:** download `Docker Container Manager v1.08.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
 
 **Script:** clone this repo and run `Start Docker Container Manager.cmd`. It starts `src\Docker-Container-Manager.ps1` with the execution policy bypassed for that run only.
 
@@ -146,7 +146,7 @@ Services that already have a group are never touched. The grouped services show 
 
 ### Settings
 
-**Settings** in the header sets the label prefix, how often the status is checked (15 seconds by default, 30 when the window is in the tray), the editor for **Edit** and **.env** (Visual Studio Code at `C:\Program Files\Microsoft VS Code\code.exe` by default, Notepad when it's empty or not found), whether Update removes unused images, whether stopping a group asks first, whether minimising hides the window in the tray instead of the taskbar (off by default), the theme (System, Light or Dark), whether app icons are shown, whether to check for newer images when the app starts, whether to show the progress window, and whether to show a Finished box when the progress window was hidden.
+**Settings** in the header sets the label prefix, how often the status is checked (15 seconds by default, 30 when the window is in the tray), the editor for **Edit** and **.env** (Visual Studio Code at `C:\Program Files\Microsoft VS Code\code.exe` by default, Notepad when it's empty or not found; **Check** beside it says whether the program is there and offers Visual Studio Code, Notepad++ or Notepad when it isn't; `%VARIABLES%` such as `%LOCALAPPDATA%` work in the path), whether Update removes unused images, whether stopping a group asks first, whether minimising hides the window in the tray instead of the taskbar (off by default), the theme (System, Light or Dark), whether app icons are shown, whether to check for newer images when the app starts, whether to show the progress window, and whether to show a Finished box when the progress window was hidden.
 
 Downloaded icons are kept in `%LOCALAPPDATA%\Docker Container Manager\Icons` and the last update check in `%APPDATA%\Docker Container Manager\updates.json`. Icon downloads send only the icon name (for example `sonarr.png`) to the jsDelivr CDN; turn icons off in Settings if you'd rather not.
 

@@ -29,10 +29,10 @@
     Opens the window with the last compose file used.
 
 .EXAMPLE
-    "Docker Container Manager v1.07.exe" -ComposeFile "D:\Docker\docker-compose.yml"
+    "Docker Container Manager v1.08.exe" -ComposeFile "D:\Docker\docker-compose.yml"
 
 .NOTES
-    Version:   1.07 (keep in step with CHANGELOG.md)
+    Version:   1.08 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -44,7 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.07'
+$script:AppVersion = '1.08'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 
 #region BUNDLE-ASSETS
@@ -1754,9 +1754,9 @@ function Open-InEditor([string]$Path, [int]$Line = 0) {
         [void][Windows.MessageBox]::Show($window, "There's no file at $Path yet.", $script:AppName, 'OK', 'Information')
         return
     }
-    $editor = [string]$script:Settings.Editor
+    $editor = Resolve-EditorPath $script:Settings.Editor
     try {
-        if ($editor -and (Test-Path -LiteralPath $editor)) {
+        if ($editor -and (Test-Path -LiteralPath $editor -PathType Leaf)) {
             $exe = [IO.Path]::GetFileName($editor).ToLowerInvariant()
             $editorArgs = "`"$Path`""
             if ($Line -gt 0) {
@@ -4215,9 +4215,54 @@ function Complete-TidySpacing($After) {
 $diskXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Disk usage" Width="940" Height="660" MinWidth="680" MinHeight="420" WindowStartupLocation="CenterOwner"
+        Title="Disk usage" Width="940" Height="660" MinWidth="780" MinHeight="420" WindowStartupLocation="CenterOwner"
         FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
-    <Window.Resources><!--SHARED--></Window.Resources>
+    <Window.Resources><!--SHARED-->
+        <!-- Small clean-up buttons that sit in each card under the space they free.
+             Accent for things Docker can make again; red (CleanRiskBtn) for anything that deletes data. -->
+        <Style x:Key="CleanBtn" TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+            <Setter Property="Background" Value="%%AccentSoft%%"/>
+            <Setter Property="BorderBrush" Value="%%InfoEdge%%"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="Margin" Value="0,6,6,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="5" Padding="{TemplateBinding Padding}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{TemplateBinding Tag}" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <ContentPresenter VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.75"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CleanRiskBtn" TargetType="Button" BasedOn="{StaticResource CleanBtn}">
+            <Setter Property="Foreground" Value="{StaticResource Bad}"/>
+            <Setter Property="Background" Value="%%ErrorBg%%"/>
+            <Setter Property="BorderBrush" Value="%%ErrorEdge%%"/>
+        </Style>
+    </Window.Resources>
     <DockPanel Margin="14">
         <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
@@ -4236,6 +4281,13 @@ $diskXaml = @'
                     <TextBlock Text="Images" Foreground="{StaticResource SoftInk}"/>
                     <TextBlock x:Name="Size0" FontSize="20" FontWeight="SemiBold" Text="..."/>
                     <TextBlock x:Name="Info0" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="Free0" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                    <WrapPanel>
+                        <Button x:Name="BtnPruneDangling" Content="Clean unnamed" Tag="&#xE894;" Style="{StaticResource CleanBtn}" IsEnabled="False"
+                                ToolTip="Removes old image versions left behind by updates (no name, no container uses them). Runs: docker image prune -f"/>
+                        <Button x:Name="BtnPruneUnused" Content="Clean unused..." Tag="&#xE894;" Style="{StaticResource CleanBtn}" IsEnabled="False"
+                                ToolTip="Removes every image no container uses, running or stopped. They download again when needed. Asks first. Runs: docker image prune -a -f"/>
+                    </WrapPanel>
                 </StackPanel>
             </Border>
             <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,8,0">
@@ -4243,6 +4295,7 @@ $diskXaml = @'
                     <TextBlock Text="Containers" Foreground="{StaticResource SoftInk}"/>
                     <TextBlock x:Name="Size1" FontSize="20" FontWeight="SemiBold" Text="..."/>
                     <TextBlock x:Name="Info1" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="Free1" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,0"/>
                 </StackPanel>
             </Border>
             <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,8,0">
@@ -4250,6 +4303,11 @@ $diskXaml = @'
                     <TextBlock Text="Volumes" Foreground="{StaticResource SoftInk}"/>
                     <TextBlock x:Name="Size2" FontSize="20" FontWeight="SemiBold" Text="..."/>
                     <TextBlock x:Name="Info2" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="Free2" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                    <WrapPanel>
+                        <Button x:Name="BtnPruneVolumes" Content="Remove unused..." Tag="&#xE74D;" Style="{StaticResource CleanRiskBtn}" IsEnabled="False"
+                                ToolTip="Deletes volumes no container uses, running or stopped, and the data in them, for good. Lists them and asks twice first. Runs: docker volume ls --filter dangling=true, then docker volume rm with exactly those names"/>
+                    </WrapPanel>
                 </StackPanel>
             </Border>
             <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,8,0">
@@ -4257,6 +4315,11 @@ $diskXaml = @'
                     <TextBlock Text="Build cache" Foreground="{StaticResource SoftInk}"/>
                     <TextBlock x:Name="Size3" FontSize="20" FontWeight="SemiBold" Text="..."/>
                     <TextBlock x:Name="Info3" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="Free3" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                    <WrapPanel>
+                        <Button x:Name="BtnPruneBuild" Content="Clean build cache" Tag="&#xE894;" Style="{StaticResource CleanBtn}" IsEnabled="False"
+                                ToolTip="Removes files kept to speed up building images. The next build may take longer. Asks first. Runs: docker builder prune -f"/>
+                    </WrapPanel>
                 </StackPanel>
             </Border>
         </UniformGrid>
@@ -4266,20 +4329,9 @@ $diskXaml = @'
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <TextBlock Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,12,0"
-                       Text="Volumes hold container data. Removing one deletes its data for good, so the volumes button lists them and asks twice."/>
-            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                <Button x:Name="BtnPruneDangling" Content="Remove unnamed images" Tag="&#xE74D;" Style="{StaticResource Btn}"
-                        ToolTip="Old image layers left behind when images were updated (docker image prune)"/>
-                <Button x:Name="BtnPruneUnused" Content="Remove unused images..." Tag="&#xE74D;" Style="{StaticResource Btn}"
-                        ToolTip="Every image no container uses, stopped containers included (docker image prune -a)"/>
-                <Button x:Name="BtnPruneBuild" Content="Clear build cache" Tag="&#xE74D;" Style="{StaticResource Btn}"
-                        ToolTip="Files kept from building images (docker builder prune)"/>
-                <Button x:Name="BtnPruneNetworks" Content="Remove unused networks" Tag="&#xE74D;" Style="{StaticResource Btn}"
-                        ToolTip="Networks no container is connected to (docker network prune)"/>
-                <Button x:Name="BtnPruneVolumes" Content="Remove unused volumes..." Tag="&#xE74D;" Style="{StaticResource Btn}" Margin="0"
-                        ToolTip="Volumes no container uses. Their data is deleted for good. Lists them and asks twice first."/>
-            </StackPanel>
-        </Grid>
+                       Text="Volumes hold container data. Removing one deletes its data for good, so the red button lists them and asks twice. Hover over a button to see exactly what it runs."/>
+            <Button x:Name="BtnPruneNetworks" Grid.Column="1" Content="Clean unused networks" Tag="&#xE894;" Style="{StaticResource CleanBtn}" Margin="0" VerticalAlignment="Center"
+                    ToolTip="Removes networks no container is connected to (they take almost no space; Compose makes them again when needed). Asks first. Runs: docker network prune -f"/>        </Grid>
         <TextBlock DockPanel.Dock="Top" Text="Images, biggest first" FontWeight="SemiBold" Margin="0,0,0,6"/>
         <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="2">
             <Grid>
@@ -4368,7 +4420,22 @@ function Update-DiskWindow {
             $total += ConvertFrom-SizeText $o.Size
             $free += ConvertFrom-SizeText $o.Reclaimable
             $d["Size$n"].Text = [string]$o.Size
-            $d["Info$n"].Text = '{0} in all, {1} in use. {2} can be freed.' -f $o.TotalCount, $o.Active, $o.Reclaimable
+            $d["Info$n"].Text = '{0} in all, {1} in use.' -f $o.TotalCount, $o.Active
+            $canFree = ConvertFrom-SizeText $o.Reclaimable
+            $freeText = ([string]$o.Reclaimable -replace '\s*\(.*\)$', '')
+            $d["Free$n"].Text = if ($canFree -le 0) { 'Nothing to free' } elseif ($n -eq 1) { "$freeText in stopped containers" } else { "$freeText can be freed" }
+            $d["Free$n"].Foreground = if ($canFree -gt 0) { $d.Window.FindResource('Ink') } else { $d.Window.FindResource('SoftInk') }
+            # A button is on only when there's something for it to remove.
+            $unused = 0
+            [void][int]::TryParse(([string]$o.TotalCount), [ref]$unused)
+            $active = 0
+            [void][int]::TryParse(([string]$o.Active), [ref]$active)
+            $unused -= $active
+            switch ($n) {
+                0 { $d.BtnPruneUnused.IsEnabled = ($canFree -gt 0 -or $unused -gt 0) }
+                2 { $d.BtnPruneVolumes.IsEnabled = ($unused -gt 0) }
+                3 { $d.BtnPruneBuild.IsEnabled = ($canFree -gt 0) }
+            }
         }
         $d.Info.Text = 'Docker uses {0} on this PC. About {1} of it can be freed.   Checked {2}' -f (Format-Bytes $total), (Format-Bytes $free), (Get-Date).ToString('HH:mm:ss')
     }
@@ -4397,6 +4464,7 @@ function Update-DiskWindow {
             $list.Add($img)
         }
         $d.Grid.ItemsSource = @($list | Sort-Object Bytes -Descending)
+        $d.BtnPruneDangling.IsEnabled = [bool]@($list | Where-Object { $_.Repository -eq '<none>' }).Count
         $d.Empty.Text = if ($res.ExitCode -ne 0) { "Docker didn't answer: $(Get-FirstLines $res.Error 2)" } else { 'No images on this PC yet.' }
         $d.Empty.Visibility = if ($list.Count) { 'Collapsed' } else { 'Visible' }
     }
@@ -4459,14 +4527,15 @@ function Show-Disk {
     $w.Owner = $window
     if ($window.Icon) { $w.Icon = $window.Icon }
     $d = @{ Window = $w; Info = $w.FindName('TxtDiskInfo'); Grid = $w.FindName('GridImages'); Empty = $w.FindName('TxtDiskEmpty') }
-    foreach ($n in 0..3) { $d["Size$n"] = $w.FindName("Size$n"); $d["Info$n"] = $w.FindName("Info$n") }
+    foreach ($n in 0..3) { $d["Size$n"] = $w.FindName("Size$n"); $d["Info$n"] = $w.FindName("Info$n"); $d["Free$n"] = $w.FindName("Free$n") }
+    foreach ($n in 'BtnPruneDangling', 'BtnPruneUnused', 'BtnPruneBuild', 'BtnPruneNetworks', 'BtnPruneVolumes') { $d[$n] = $w.FindName($n) }
     $script:DiskForm = $d
     $w.FindName('BtnDiskRefresh').Add_Click({ Update-DiskWindow })
-    $w.FindName('BtnPruneDangling').Add_Click({ Invoke-Prune 'dangling' })
-    $w.FindName('BtnPruneUnused').Add_Click({ Invoke-Prune 'unused' })
-    $w.FindName('BtnPruneBuild').Add_Click({ Invoke-Prune 'build' })
-    $w.FindName('BtnPruneNetworks').Add_Click({ Invoke-Prune 'networks' })
-    $w.FindName('BtnPruneVolumes').Add_Click({ Invoke-VolumePrune })
+    $d.BtnPruneDangling.Add_Click({ Invoke-Prune 'dangling' })
+    $d.BtnPruneUnused.Add_Click({ Invoke-Prune 'unused' })
+    $d.BtnPruneBuild.Add_Click({ Invoke-Prune 'build' })
+    $d.BtnPruneNetworks.Add_Click({ Invoke-Prune 'networks' })
+    $d.BtnPruneVolumes.Add_Click({ Invoke-VolumePrune })
     $w.Add_KeyDown({ param($src, $e) if ($e.Key -eq 'Escape') { $src.Close() } elseif ($e.Key -eq 'F5') { Update-DiskWindow; $e.Handled = $true } })
     $w.Add_Closed({ $script:DiskForm = $null })
     $w.Show()
@@ -5166,7 +5235,7 @@ function Update-LogWindows {
 $settingsXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Settings" Width="640" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        Title="Settings" Width="680" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
         FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
     <Window.Resources><!--SHARED--></Window.Resources>
     <StackPanel Margin="18">
@@ -5193,12 +5262,25 @@ $settingsXaml = @'
                     <TextBox x:Name="TxtRefresh" Style="{StaticResource Field}" Width="60"/>
                     <TextBlock Text="seconds (2 to 300)" VerticalAlignment="Center" Margin="8,0,0,0" Foreground="{StaticResource SoftInk}"/>
                 </StackPanel>
-                <TextBlock Grid.Row="2" Text="Editor" VerticalAlignment="Center" Margin="0,0,0,10"/>
-                <Grid Grid.Row="2" Grid.Column="1" Margin="0,0,0,10">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                    <TextBox x:Name="TxtEditor" Style="{StaticResource Field}" ToolTip="Visual Studio Code by default. Leave empty, or point at a missing program, to use Notepad"/>
-                    <Button x:Name="BtnEditor" Grid.Column="1" Content="Browse..." Style="{StaticResource Btn}" Margin="6,0,0,0"/>
-                </Grid>
+                <TextBlock Grid.Row="2" Text="Editor" VerticalAlignment="Top" Margin="0,5,0,10"/>
+                <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,10">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBox x:Name="TxtEditor" Style="{StaticResource Field}" ToolTip="Visual Studio Code by default. Leave empty, or point at a missing program, to use Notepad"/>
+                        <Button x:Name="BtnEditorCheck" Grid.Column="1" Content="Check" Tag="&#xE73E;" Style="{StaticResource Btn}" Margin="6,0,0,0"
+                                ToolTip="Check that the editor is there, and suggest one if it isn't"/>
+                        <Button x:Name="BtnEditor" Grid.Column="2" Content="Browse..." Style="{StaticResource Btn}" Margin="6,0,0,0"/>
+                    </Grid>
+                    <Grid x:Name="PnlEditorCheck" Margin="0,6,0,0" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock x:Name="TxtEditorCheckIcon" FontFamily="Segoe MDL2 Assets" FontSize="12" Margin="1,3,8,0" VerticalAlignment="Top"/>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock x:Name="TxtEditorCheck" FontSize="12" TextWrapping="Wrap"/>
+                            <Button x:Name="BtnEditorUse" Style="{StaticResource LinkBtn}" FontSize="12" HorizontalAlignment="Left" Margin="0,3,0,0" Visibility="Collapsed"
+                                    ToolTip="Put this editor in the box (saved when you press Save)"/>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
                 <TextBlock Grid.Row="3" Text="Theme" VerticalAlignment="Center" Margin="0,0,0,10"/>
                 <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,10">
                     <ComboBox x:Name="CmbTheme" Width="150" VerticalContentAlignment="Center"/>
@@ -5234,12 +5316,100 @@ function Update-PrefixHelp {
     $script:SettingsForm.TxtPrefixHelp.Text = "Groups come from the $p.group label. $p.url sets a container's web page ($p.url=none hides it), $p.description its tooltip, $p.icon its icon, $p.color its group's colour and $p.source its source page."
 }
 
+# The editor path as typed, without quotes and with %VARIABLES% filled in.
+function Resolve-EditorPath([string]$Text) {
+    $p = ([string]$Text).Trim().Trim('"').Trim()
+    if (-not $p) { return '' }
+    return [Environment]::ExpandEnvironmentVariables($p)
+}
+
+# Is there a program at this path? Returns Ok, the path and a sentence to show.
+function Test-EditorPath([string]$Text) {
+    $p = Resolve-EditorPath $Text
+    $r = [pscustomobject]@{ Ok = $false; Path = $p; Message = '' }
+    if (-not $p) { $r.Message = 'No editor is set, so Notepad is used.'; return $r }
+    try {
+        if (Test-Path -LiteralPath $p -PathType Container) { $r.Message = "That's a folder, not a program: $p"; return $r }
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { $r.Message = "There's nothing at $p"; return $r }
+    } catch { $r.Message = "That isn't a path Windows can use: $p"; return $r }
+    if ([IO.Path]::GetExtension($p).ToLowerInvariant() -notin '.exe', '.cmd', '.bat') {
+        $r.Message = "That isn't a program (.exe, .cmd or .bat): $p"; return $r
+    }
+    $r.Ok = $true
+    $r.Message = 'Found: ' + (Get-EditorName $p)
+    return $r
+}
+
+# A friendly name for a program: its product name and version when it has them.
+function Get-EditorName([string]$Path) {
+    $name = [IO.Path]::GetFileName($Path)
+    try {
+        $vi = [Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+        $product = if ($vi.ProductName) { $vi.ProductName.Trim() } elseif ($vi.FileDescription) { $vi.FileDescription.Trim() } else { '' }
+        if ($product) {
+            $name = $product
+            if ($vi.ProductVersion) { $name += ' ' + $vi.ProductVersion.Trim() }
+        }
+    } catch { Write-Verbose "No version information for $Path." }
+    return $name
+}
+
+# The first editor found on this PC (VS Code, then Notepad++, then Notepad), other than $Skip.
+function Find-Editor([string]$Skip) {
+    $candidates = @(
+        (Join-Path $env:ProgramFiles 'Microsoft VS Code\Code.exe'),
+        $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe' }),
+        (Join-Path $env:ProgramFiles 'Notepad++\notepad++.exe'),
+        $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'Notepad++\notepad++.exe' }),
+        (Join-Path ([Environment]::SystemDirectory) 'notepad.exe'),
+        $(if ($env:WINDIR) { Join-Path $env:WINDIR 'notepad.exe' })
+    )
+    foreach ($c in $candidates) {
+        if (-not $c -or -not (Test-Path -LiteralPath $c -PathType Leaf)) { continue }
+        if ($Skip -and [string]::Equals($c, $Skip, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        return $c
+    }
+    return $null
+}
+
+# Check the editor box and show the result under it, with a "Use ..." link when there's a better choice.
+function Update-EditorCheck {
+    $f = $script:SettingsForm
+    $r = Test-EditorPath $f.TxtEditor.Text
+    $f.EditorChecked = $r.Path
+    $f.PnlEditorCheck.Visibility = 'Visible'
+    $f.TxtEditorCheck.Text = $r.Message
+    if ($r.Ok) {
+        $f.TxtEditorCheckIcon.Text = [string][char]0xE73E
+        $f.TxtEditorCheckIcon.Foreground = $f.Window.FindResource('Ok')
+        $f.TxtEditorCheck.Foreground = $f.Window.FindResource('Ink')
+        $f.BtnEditorUse.Visibility = 'Collapsed'
+        return
+    }
+    $f.TxtEditorCheckIcon.Text = [string][char]0xE711
+    $f.TxtEditorCheckIcon.Foreground = $f.Window.FindResource('Bad')
+    $f.TxtEditorCheck.Foreground = $f.Window.FindResource('Ink')
+    $found = Find-Editor $r.Path
+    if ($found) {
+        $f.EditorSuggestion = $found
+        $name = Get-EditorName $found
+        $f.TxtEditorCheck.Text = $r.Message + "`nThis PC has $name at $found"
+        $f.BtnEditorUse.Content = "Use $name"
+        $f.BtnEditorUse.ToolTip = "Put $found in the box (saved when you press Save)"
+        $f.BtnEditorUse.Visibility = 'Visible'
+    }
+    else {
+        $f.EditorSuggestion = $null
+        $f.BtnEditorUse.Visibility = 'Collapsed'
+    }
+}
+
 function Show-Settings {
     $w = New-XamlObject $settingsXaml
     $w.Owner = $window
     if ($window.Icon) { $w.Icon = $window.Icon }
     $f = @{ Window = $w; Saved = $false }
-    foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'CmbTheme', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'ChkIcons', 'ChkUpdates', 'ChkProgress', 'ChkFinished', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
+    foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'BtnEditorCheck', 'PnlEditorCheck', 'TxtEditorCheckIcon', 'TxtEditorCheck', 'BtnEditorUse', 'CmbTheme', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'ChkIcons', 'ChkUpdates', 'ChkProgress', 'ChkFinished', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
     $w.FindName('BtnSourceLinks').Add_Click({ Edit-SourceList })
     $script:SettingsForm = $f
     $f.TxtPrefix.Text = $script:Settings.LabelPrefix
@@ -5259,8 +5429,18 @@ function Show-Settings {
     $f.TxtPrefix.Add_TextChanged({ Update-PrefixHelp })
     $f.BtnEditor.Add_Click({
             $dlg = New-Object Microsoft.Win32.OpenFileDialog
-            $dlg.Filter = 'Programs (*.exe)|*.exe'
-            if ($dlg.ShowDialog($script:SettingsForm.Window)) { $script:SettingsForm.TxtEditor.Text = $dlg.FileName }
+            $dlg.Filter = 'Programs (*.exe;*.cmd;*.bat)|*.exe;*.cmd;*.bat'
+            if ($dlg.ShowDialog($script:SettingsForm.Window)) { $script:SettingsForm.TxtEditor.Text = $dlg.FileName; Update-EditorCheck }
+        })
+    $f.BtnEditorCheck.Add_Click({ Update-EditorCheck })
+    $f.BtnEditorUse.Add_Click({
+            $s = $script:SettingsForm
+            if ($s.EditorSuggestion) { $s.TxtEditor.Text = $s.EditorSuggestion; Update-EditorCheck }
+        })
+    # A result is about the path that was checked: hide it once the path is changed by hand.
+    $f.TxtEditor.Add_TextChanged({
+            $s = $script:SettingsForm
+            if ($s -and $s.PnlEditorCheck.Visibility -eq 'Visible' -and (Resolve-EditorPath $s.TxtEditor.Text) -ne $s.EditorChecked) { $s.PnlEditorCheck.Visibility = 'Collapsed' }
         })
     $f.BtnSaveSettings.Add_Click({
             $f = $script:SettingsForm
@@ -5273,8 +5453,9 @@ function Show-Settings {
                 [void][Windows.MessageBox]::Show($f.Window, 'Label prefix: use letters, numbers, dots, dashes or underscores, for example home.', 'Settings', 'OK', 'Warning'); return
             }
             $editor = $f.TxtEditor.Text.Trim().Trim('"')
-            if ($editor -and -not (Test-Path -LiteralPath $editor -PathType Leaf)) {
-                [void][Windows.MessageBox]::Show($f.Window, "Editor: there's no program at $editor. Leave it empty to use Notepad.", 'Settings', 'OK', 'Warning'); return
+            if ($editor -and -not (Test-EditorPath $editor).Ok) {
+                Update-EditorCheck
+                [void][Windows.MessageBox]::Show($f.Window, "Editor: there's no program at $(Resolve-EditorPath $editor). Leave it empty to use Notepad, or see the suggestion under the box.", 'Settings', 'OK', 'Warning'); return
             }
             $prefixChanged = ($prefix -ne $script:Settings.LabelPrefix)
             $script:Settings.LabelPrefix = $prefix
@@ -5306,6 +5487,12 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.08' = @(
+        'Disk usage: smaller clean-up buttons sit in each card next to the space they free, off when there''s nothing to free. Volumes (which deletes data) is red, and each tooltip says exactly what it runs.',
+        'Settings: a Check button beside the editor says whether the program is there. If it isn''t, it offers Visual Studio Code, Notepad++ or Notepad, and Use fills the box (saved when you press Save).',
+        'About: split into sections (About, What''s new, This PC, Keyboard shortcuts) that open and close with a click. What''s new has a section for each version, with only the newest open.',
+        'About: the window is never taller than the screen. The middle part scrolls, while the header and the Close button stay in view.'
+    )
     '1.07' = @(
         'Export: the Light / dark switch is bigger and sits in the blue header at the top of the page, so it''s easy to find.'
     )
@@ -5367,8 +5554,68 @@ $aboutXaml = @'
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Width="580" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
         FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
-    <Window.Resources><!--SHARED--></Window.Resources>
-    <StackPanel>
+    <Window.Resources><!--SHARED-->
+        <!-- Fold-away sections, in the same style as the group headers in the main list:
+             a chevron, a bold title and a soft count (Tag). -->
+        <Style x:Key="AboutSection" TargetType="Expander">
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Expander">
+                        <StackPanel>
+                            <ToggleButton IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                                          Cursor="Hand" FocusVisualStyle="{x:Null}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="Bd" Background="Transparent" Padding="4,5,4,5" CornerRadius="4">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock x:Name="Chevron" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                           VerticalAlignment="Center" Margin="2,0,8,0" Foreground="{StaticResource SoftInk}"/>
+                                                <TextBlock Text="{Binding Header, RelativeSource={RelativeSource AncestorType=Expander}}" FontWeight="SemiBold"
+                                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Expander}}"/>
+                                                <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource AncestorType=Expander}}" Foreground="{StaticResource SoftInk}" Margin="6,0,0,0"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsChecked" Value="False">
+                                                <Setter TargetName="Chevron" Property="Text" Value="&#xE76C;"/>
+                                            </Trigger>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource Hover}"/>
+                                            </Trigger>
+                                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource Hover}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter x:Name="Body" Margin="24,2,4,6" Visibility="Collapsed"/>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsExpanded" Value="True">
+                                <Setter TargetName="Body" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- A version inside What's new: the same, a little smaller, the title in the accent colour. -->
+        <Style x:Key="AboutVersionSection" TargetType="Expander" BasedOn="{StaticResource AboutSection}">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Margin" Value="0,0,0,0"/>
+            <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+        </Style>
+    </Window.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
         <Border Padding="20,16">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
@@ -5384,18 +5631,26 @@ $aboutXaml = @'
                 </StackPanel>
             </StackPanel>
         </Border>
-        <StackPanel Margin="20,14,20,0">
-            <TextBlock Text="Run and organise the containers in a Docker Compose file." TextWrapping="Wrap"/>
-            <TextBlock Text="What's new" FontWeight="SemiBold" Margin="0,14,0,4"/>
-            <StackPanel x:Name="AboutNew"/>
-            <TextBlock Text="This PC" FontWeight="SemiBold" Margin="0,14,0,4"/>
-            <TextBlock x:Name="AboutDocker" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap"/>
-            <TextBlock x:Name="AboutPaths" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" Margin="0,2,0,0"/>
-            <TextBlock Text="Keys" FontWeight="SemiBold" Margin="0,14,0,4"/>
-            <TextBlock Foreground="{StaticResource SoftInk}" TextWrapping="Wrap"
-                       Text="F5 refresh  ·  Ctrl+F search  ·  Ctrl+T list or cards  ·  Ctrl+E configure  ·  Ctrl+L logs  ·  Enter open web page  ·  Ctrl+A select all  ·  double-click a container to open its web page (or its logs if it has none)"/>
+        <ScrollViewer x:Name="AboutScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+        <StackPanel Margin="16,12,20,0">
+            <Expander x:Name="SecAbout" Header="About" IsExpanded="True" Style="{StaticResource AboutSection}">
+                <TextBlock Text="Run and organise the containers in a Docker Compose file." TextWrapping="Wrap" FontSize="13"/>
+            </Expander>
+            <Expander x:Name="SecNew" Header="What's new" IsExpanded="True" Style="{StaticResource AboutSection}">
+                <StackPanel x:Name="AboutNew" Margin="-6,0,0,0"/>
+            </Expander>
+            <Expander x:Name="SecPc" Header="This PC" Style="{StaticResource AboutSection}">
+                <StackPanel>
+                    <TextBlock x:Name="AboutDocker" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" FontSize="13"/>
+                    <TextBlock x:Name="AboutPaths" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" FontSize="13" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Expander>
+            <Expander x:Name="SecKeys" Header="Keyboard shortcuts" Style="{StaticResource AboutSection}">
+                <TextBlock x:Name="AboutKeys" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" FontSize="13" LineHeight="20"/>
+            </Expander>
         </StackPanel>
-        <Grid Margin="20,16,20,18">
+        </ScrollViewer>
+        <Grid Grid.Row="2" Margin="20,16,20,18">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <Button x:Name="AboutRepo" Style="{StaticResource LinkBtn}" HorizontalAlignment="Left"/>
@@ -5403,7 +5658,7 @@ $aboutXaml = @'
             </StackPanel>
             <Button x:Name="AboutClose" Grid.Column="1" Content="Close" Style="{StaticResource PrimaryBtn}" IsCancel="True" IsDefault="True" Margin="0"/>
         </Grid>
-    </StackPanel>
+    </Grid>
 </Window>
 '@
 
@@ -5412,6 +5667,8 @@ function Show-About {
     $w.Owner = $window
     if ($window.Icon) { $w.Icon = $window.Icon }
     $w.Title = "About $script:AppName"
+    # No taller than 85% of the screen's work area; the middle part scrolls.
+    $w.MaxHeight = [Math]::Floor([Windows.SystemParameters]::WorkArea.Height * 0.85)
     $w.FindName('AboutLogo').Source = $ui.ImgLogo.Source
     $w.FindName('AboutName').Text = $script:AppName
     $w.FindName('AboutVersion').Text = "Version $script:AppVersion"
@@ -5420,16 +5677,59 @@ function Show-About {
     $repo.Content = $script:RepoUrl
     $repo.Add_Click({ Open-Url $script:RepoUrl })
     $w.FindName('AboutClose').Add_Click({ [Windows.Window]::GetWindow($this).Close() })
+    # What's new: a fold-away section for each version, newest first and the only one open.
     $panel = $w.FindName('AboutNew')
+    $versionStyle = $w.FindResource('AboutVersionSection')
+    $ink = $w.FindResource('Ink')
+    $first = $true
     foreach ($v in $script:WhatsNew.Keys) {
-        foreach ($item in $script:WhatsNew[$v]) {
+        $items = @($script:WhatsNew[$v])
+        $sec = New-Object Windows.Controls.Expander
+        $sec.Style = $versionStyle
+        $sec.Header = "v$v"
+        $sec.Tag = [string][char]0x00B7 + ' ' + $(if ($items.Count -eq 1) { '1 change' } else { "$($items.Count) changes" })
+        $sec.IsExpanded = $first
+        $first = $false
+        $list = New-Object Windows.Controls.StackPanel
+        foreach ($item in $items) {
             $t = New-Object Windows.Controls.TextBlock
             $t.Text = [string][char]0x2022 + '  ' + $item
             $t.TextWrapping = 'Wrap'
+            $t.Foreground = $ink
             $t.Margin = '0,1,0,1'
-            [void]$panel.Children.Add($t)
+            [void]$list.Children.Add($t)
         }
+        $sec.Content = $list
+        [void]$panel.Children.Add($sec)
     }
+    # Keyboard shortcuts: one per line, the key in the normal ink and what it does in the soft ink.
+    $keys = $w.FindName('AboutKeys')
+    $shortcuts = [ordered]@{
+        'F5'                       = 'refresh'
+        'Ctrl+F'                   = 'search'
+        'Ctrl+T'                   = 'list or cards'
+        'Ctrl+E'                   = 'configure'
+        'Ctrl+L'                   = 'logs'
+        'Ctrl+A'                   = 'select all'
+        'F1'                       = 'help'
+        'Enter'                    = 'open the web page'
+        'Double-click a container' = 'open its web page (or its logs if it has none)'
+    }
+    $firstKey = $true
+    foreach ($k in $shortcuts.Keys) {
+        if (-not $firstKey) { $keys.Inlines.Add((New-Object Windows.Documents.LineBreak)) }
+        $firstKey = $false
+        $run = New-Object Windows.Documents.Run $k
+        $run.Foreground = $ink
+        $keys.Inlines.Add($run)
+        $keys.Inlines.Add((New-Object Windows.Documents.Run ('  ' + [string][char]0x00B7 + '  ' + $shortcuts[$k])))
+    }
+    # Opening a section makes the window taller: keep its bottom on the screen.
+    $w.Add_SizeChanged({
+            param($s)
+            $wa = [Windows.SystemParameters]::WorkArea
+            if ($s.Top + $s.ActualHeight -gt $wa.Bottom) { $s.Top = [Math]::Max($wa.Top, $wa.Bottom - $s.ActualHeight) }
+        })
     $script:AboutDockerText = $w.FindName('AboutDocker')
     $script:AboutDockerText.Text = if (Test-DockerReady) { 'Docker: checking...' } else { "Docker: docker.exe wasn't found." }
     $composeText = if ($script:ComposePath) { $script:ComposePath } else { 'none chosen' }
@@ -6362,7 +6662,7 @@ $script:HelpTopics = [ordered]@{
         '- Ctrl+A: select everything; Esc: clear the search'
     )
     'Settings and files' = @(
-        'Settings sets the label prefix, how often the status is checked, the editor, the theme, the tray, app icons, update checks, the progress window and the Finished box.',
+        'Settings sets the label prefix, how often the status is checked, the editor (Check says whether it''s there and suggests one if not), the theme, the tray, app icons, update checks, the progress window and the Finished box.',
         '- Settings (settings.json), your source links (source-links.txt) and backups of the compose file and .env (Backups) are in %APPDATA%\Docker Container Manager.',
         '- Downloaded icons are in %LOCALAPPDATA%\Docker Container Manager\Icons.',
         'Nothing is installed: delete that folder to start again.'

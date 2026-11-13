@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.08] - 2026-11-13
+
+### Added
+- **Settings**: a **Check** button beside the editor path. It says whether the program is there (with its name and version) or what's wrong
+  (nothing there, a folder, not an .exe, .cmd or .bat). When it isn't right it offers the first editor found: Visual Studio Code
+  (Program Files or your user folder), Notepad++, then Notepad. **Use ...** fills the box; it's saved when you press **Save**.
+  `%VARIABLES%` such as `%LOCALAPPDATA%` now work in the editor path.
+
+### Changed
+- **Disk usage**: the clean-up buttons are smaller, with an icon and a short label, and sit in each card under the space they free:
+  **Clean unnamed** and **Clean unused...** (Images), **Remove unused...** (Volumes, in red because it deletes data) and
+  **Clean build cache**; **Clean unused networks** stays at the bottom. Each is off when there's nothing to free, and the
+  tooltip says exactly which docker command it runs. The questions before each one are unchanged (volumes still asks twice).
+  The window's smallest width is now 780 so the buttons always fit.
+- **About** is split into sections that open and close with a click, in the same style as the group headers: **About** (open),
+  **What's new** with a section per version showing its number of changes (only the newest open), **This PC** and
+  **Keyboard shortcuts** (one per line, now including F1). The window moves up if an opened section would push it off the screen.
+
+### Fixed
+- **About**: the window could grow taller than the screen as the What's new list got longer, hiding the **Close** button.
+  It's now no taller than 85% of the screen's work area; the middle part scrolls (with the app's light or dark scroll bar),
+  while the header and the bottom row (link, copyright, **Close**) stay in view.
+
 ## [1.07] - 2026-11-13
 
 ### Fixed
