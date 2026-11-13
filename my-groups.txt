@@ -1,0 +1,153 @@
+# My groups for Docker Container Manager. This file stays on this PC.
+# One container per line: its service name, a | and its group, for example:
+#   web | Websites
+# Group automatically uses these first. Capitals and spaces around the | don't matter.
+# Lines starting with # are ignored.
+
+airsonic-advanced | Music
+ampache | Music
+apache | Websites
+arcane | Docker and monitoring
+audiobookshelf | Books and comics
+bazarr | Arr and indexers
+booklore | Books and comics
+bookorbit | Books and comics
+brave | Desktops and browsers
+calibre | Books and comics
+calibre-web | Books and comics
+calibre-web-automated | Books and comics
+chevereto | Photos and images
+chibisafe | Photos and images
+chrome | Desktops and browsers
+cloudreve | Files and cloud
+conreq | Requests
+convertx | Media tools
+dashmachine | Dashboards
+dashy | Dashboards
+datetime-app | Tools
+dcm | Dashboards
+dockhand | Docker and monitoring
+dockman | Docker and monitoring
+doku | Docker and monitoring
+dozzle | Docker and monitoring
+dumbterm | Desktops and browsers
+dweebui | Docker and monitoring
+elasticsearch | Databases
+emby | Video servers
+embystat | Media stats and extras
+feishin | Music
+filebrowser | Files and cloud
+filebrowser-quantum | Files and cloud
+filestash | Files and cloud
+firefox | Desktops and browsers
+foldergram | Photos and images
+get_iplayer | Downloads
+glances | Docker and monitoring
+goaccess | Docker and monitoring
+gonic | Music
+guacamole | Desktops and browsers
+guacd | Desktops and browsers
+hammond | Downloads
+handbrake | Media tools
+heimdall | Dashboards
+homarr | Dashboards
+homepage | Dashboards
+hometube | YouTube
+immich | Photos and images
+immich-kiosk | Photos and images
+it-tools | Tools
+jdownloader2 | Downloads
+jellyfin | Video servers
+jellyglance | Media stats and extras
+jellystat | Media stats and extras
+joomla | Websites
+kavita | Books and comics
+komga | Books and comics
+lab-dash | Dashboards
+lazylibrarian | Books and comics
+leet | Docker and monitoring
+librespeed | Network and speed
+lidarr | Arr and indexers
+linkwarden | Tools
+lms | Music
+maintenant | Docker and monitoring
+mariadb | Databases
+matomo | Websites
+mealie | Tools
+mediainfo | Media tools
+medialytics | Media stats and extras
+medialyze | Media stats and extras
+mediawiki | Websites
+medusa | Arr and indexers
+metube | YouTube
+mkvtoolnix | Media tools
+mongo | Databases
+mstream | Music
+multi-scrobbler | Music
+mvidarr | Arr and indexers
+mylar3 | Arr and indexers
+myspeed | Network and speed
+navidrome | Music
+netdata | Docker and monitoring
+nextcloud | Files and cloud
+nicotineplus | Downloads
+ntopng | Network and speed
+nzbfast | Downloads
+nzbget | Downloads
+nzbhydra2 | Arr and indexers
+ombi | Requests
+omni-tools | Tools
+openspeedtest | Network and speed
+organizr | Dashboards
+owncloud | Files and cloud
+pelagica | Media stats and extras
+petio | Requests
+pgadmin | Databases
+photopea | Photos and images
+phpmyadmin | Databases
+piwigo | Photos and images
+plex | Video servers
+podgrab | Downloads
+porn-vault | Private
+posterizarr | Media stats and extras
+postgres | Databases
+prowlarr | Arr and indexers
+pyload-ng | Downloads
+radarr | Arr and indexers
+readmeabook | Books and comics
+redis | Databases
+reiverr | Requests
+retroassembly | Desktops and browsers
+roundcube | Websites
+sabnzbd | Downloads
+seerr | Requests
+slskd | Downloads
+sonarr | Arr and indexers
+soniqboom | Music
+speedtest-tracker | Network and speed
+spotweb | Downloads
+stash | Private
+streamystats | Media stats and extras
+streamystats-job-server | Media stats and extras
+stump | Books and comics
+subscription-manager | Tools
+subsonic | Music
+swingmusic | Music
+tautulli | Media stats and extras
+termix | Desktops and browsers
+tinymediamanager | Arr and indexers
+trailarr | Media stats and extras
+tubesync | YouTube
+ubuntu | Desktops and browsers
+uptime-kuma | Docker and monitoring
+vert | Media tools
+weaver | Downloads
+web | Websites
+whisparr | Private
+windows | Desktops and browsers
+wordpress | Websites
+xbackbone | Photos and images
+yacht | Docker and monitoring
+youtarr | YouTube
+ytdl-material | YouTube
+yt-dlp-web-ui | YouTube

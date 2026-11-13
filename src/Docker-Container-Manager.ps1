@@ -29,10 +29,10 @@
     Opens the window with the last compose file used.
 
 .EXAMPLE
-    "Docker Container Manager v1.09.exe" -ComposeFile "D:\Docker\docker-compose.yml"
+    "Docker Container Manager v1.10.exe" -ComposeFile "D:\Docker\docker-compose.yml"
 
 .NOTES
-    Version:   1.09 (keep in step with CHANGELOG.md)
+    Version:   1.10 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -44,12 +44,14 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.09'
+$script:AppVersion = '1.10'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 
 #region BUNDLE-ASSETS
 # Build-Exe.cmd replaces this region with the icon and logo as base64, so the exe
 # needs no other files. Running from source, they are read from ..\assets\.
+# If Source\my-groups.txt is there when the exe is built, it's put in too as the
+# built-in My groups list.
 $script:EmbeddedAssets = @{}
 #endregion BUNDLE-ASSETS
 
@@ -78,6 +80,7 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 #   Dcm.Finding    - one result of the compose file check.
 #   Dcm.EnvEntry   - one environment variable in the Configure window.
 #   Dcm.ImageInfo  - one image in the Disk usage window.
+#   Dcm.MyGroupEntry - one line of My groups (my-groups.txt).
 #   Dcm.Native     - dark title bars (Windows 10 20H1 and later).
 # ---------------------------------------------------------------------------
 if (-not ('Dcm.Native' -as [type])) {
@@ -257,6 +260,12 @@ namespace Dcm {
         public string Created    { get; set; }
         public string UsedBy     { get; set; }
         public string Name       { get { return Repository == "<none>" ? "(no name)" : Repository + ":" + Tag; } }
+    }
+
+    // One line of My groups (my-groups.txt): a service name and its group.
+    public class MyGroupEntry {
+        public string Service { get; set; }
+        public string Group   { get; set; }
     }
 
     public static class Native {
@@ -2462,6 +2471,7 @@ function Start-ConfigLoad {
             $script:PendingConfig = $null
             if ($script:LoadingGen -ne $script:ConfigGen) { $script:ConfigWanted = $true; return }
             Import-ComposeConfig $pending $hashes
+            if ($script:MyGroupsAuto) { $script:MyGroupsAuto = -not (Initialize-MyGroupsFile) }
         }
     }
 }
@@ -5337,7 +5347,10 @@ $settingsXaml = @'
             </Grid>
         </Border>
         <TextBlock x:Name="TxtWhere" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap" Margin="2,10,0,0"/>
-        <Button x:Name="BtnSourceLinks" Content="Edit source links..." Style="{StaticResource LinkBtn}" HorizontalAlignment="Left" Margin="2,4,0,0" ToolTip="Your own list of project pages for the Source button, kept on this PC (source-links.txt)"/>
+        <StackPanel Orientation="Horizontal" Margin="2,4,0,0">
+            <Button x:Name="BtnSourceLinks" Content="Edit source links..." Style="{StaticResource LinkBtn}" Margin="0,0,16,0" ToolTip="Your own list of project pages for the Source button, kept on this PC (source-links.txt)"/>
+            <Button x:Name="BtnMyGroups" Content="My groups..." Style="{StaticResource LinkBtn}" ToolTip="Your own list of which group each container goes in, used first by Group automatically (my-groups.txt on this PC)"/>
+        </StackPanel>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
             <Button x:Name="BtnSaveSettings" Content="Save" Tag="&#xE74E;" Style="{StaticResource PrimaryBtn}" IsDefault="True"/>
             <Button x:Name="BtnCancelSettings" Content="Cancel" Style="{StaticResource Btn}" IsCancel="True" Margin="0"/>
@@ -5492,6 +5505,7 @@ function Show-Settings {
     $f = @{ Window = $w; Saved = $false }
     foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'BtnEditorCheck', 'PnlEditorCheck', 'TxtEditorCheckIcon', 'TxtEditorCheck', 'BtnEditorUse', 'BtnEditorOther', 'CmbTheme', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'ChkIcons', 'ChkUpdates', 'ChkProgress', 'ChkFinished', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
     $w.FindName('BtnSourceLinks').Add_Click({ Edit-SourceList })
+    $w.FindName('BtnMyGroups').Add_Click({ Show-MyGroups $script:SettingsForm.Window })
     $script:SettingsForm = $f
     $f.TxtPrefix.Text = $script:Settings.LabelPrefix
     $f.TxtRefresh.Text = [string]$script:Settings.RefreshSeconds
@@ -5565,6 +5579,10 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.10' = @(
+        'My groups: your own list of which group each container goes in, kept on this PC and ready from the start (the built-in list, or the first compose file loaded). Group automatically uses it first and only guesses the rest (the From column says which), and can add what you save to it.',
+        'My groups window (from Group automatically or Settings): sort, filter, add, change and remove rows, fill it from the current compose file''s labels, reset it to the built-in list, open it in your editor. A backup is kept on each save.'
+    )
     '1.09' = @(
         'Compose file list: Other compose file... at the end picks a file anywhere on this PC, and right-click an entry for Remove from list (the file itself is never touched).',
         'Settings: Check also finds VS Code and Notepad++ wherever Windows says they''re installed (not only the usual folders), and Choose another editor... under the result lets you pick any program.',
@@ -6162,8 +6180,15 @@ $autoGroupXaml = @'
         </StackPanel>
         <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <TextBlock x:Name="TxtAgNote" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,12,0"/>
-            <StackPanel Grid.Column="1" Orientation="Horizontal">
+            <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                <TextBlock x:Name="TxtAgNote" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap"/>
+                <CheckBox x:Name="ChkAgMine" Margin="0,6,0,0" IsChecked="True"
+                          Content="Also add the new groups to My groups"
+                          ToolTip="After Save groups, adds each saved container that isn't in My groups yet (my-groups.txt on this PC). Groups already in My groups aren't changed."/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                <Button x:Name="BtnAgMine" Content="My groups..." Tag="&#xE8FD;" Style="{StaticResource Btn}"
+                        ToolTip="See and change your own list of groups (my-groups.txt on this PC)"/>
                 <Button x:Name="BtnAgSave" Content="Save groups" Tag="&#xE74E;" Style="{StaticResource PrimaryBtn}"/>
                 <Button Content="Cancel" Style="{StaticResource Btn}" IsCancel="True" Margin="0"/>
             </StackPanel>
@@ -6171,7 +6196,7 @@ $autoGroupXaml = @'
         <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="12,8">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <Grid x:Name="GridAg">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="210"/><ColumnDefinition Width="*"/><ColumnDefinition Width="230"/></Grid.ColumnDefinitions>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="190"/><ColumnDefinition Width="*"/><ColumnDefinition Width="210"/><ColumnDefinition Width="96"/></Grid.ColumnDefinitions>
                 </Grid>
             </ScrollViewer>
         </Border>
@@ -6191,6 +6216,8 @@ function Show-AutoGroup {
     if (-not $rows.Count) { Set-Status 'Every container already has a group.'; return }
     $prefix = [string]$script:Settings.LabelPrefix
     $known = Get-KnownGroups
+    [void](Initialize-MyGroupsFile)
+    $mine = Get-MyGroupsMap
     $w = New-XamlObject $autoGroupXaml
     $w.Owner = $window
     if ($window.Icon) { $w.Icon = $window.Icon }
@@ -6198,17 +6225,25 @@ function Show-AutoGroup {
     $grid = $w.FindName('GridAg')
     $soft = $w.FindResource('SoftInk')
     $i = 0
-    foreach ($h in 'Container', 'Image', 'Group') {
+    foreach ($h in 'Container', 'Image', 'Group', 'From') {
         $tb = New-Object Windows.Controls.TextBlock -Property @{ Text = $h; FontWeight = 'SemiBold'; Foreground = $soft; Margin = '0,0,8,6' }
         if ($i -eq 0) { $grid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition -Property @{ Height = [Windows.GridLength]::Auto })) }
         Add-AutoGroupCell $grid $tb 0 $i
         $i++
     }
-    $n = 1; $suggested = 0
+    $n = 1; $suggested = 0; $fromMine = 0
+    $accent = $w.FindResource('Accent')
     foreach ($r in $rows) {
         $hint = Get-GroupHint $r.Image $r.Service
         $group = ''
-        if ($hint) {
+        $from = ''
+        if ($mine -and $mine.ContainsKey($r.Service.ToLowerInvariant())) {
+            $group = $mine[$r.Service.ToLowerInvariant()]
+            $from = 'My groups'
+            $fromMine++
+        }
+        elseif ($hint) {
+            $from = 'Guessed'
             $suggested++
             if ($known.Map.ContainsKey($hint)) { $group = $known.Map[$hint] }
             else { $same = @($known.Used | Where-Object { $_ -eq $hint }); $group = if ($same.Count) { $same[0] } else { $hint } }
@@ -6219,15 +6254,24 @@ function Show-AutoGroup {
         $box = New-Object Windows.Controls.TextBox -Property @{ Text = $group; Margin = '0,0,0,6'; ToolTip = 'Type a group, or leave it empty to keep this container ungrouped' }
         $box.Style = $w.FindResource('Field')
         Add-AutoGroupCell $grid $box $n 2
-        [void]$f.Items.Add(@{ Service = $r.Service; Box = $box })
+        $src = New-Object Windows.Controls.TextBlock -Property @{ Text = $from; VerticalAlignment = 'Center'; Margin = '10,0,0,6'; FontSize = 12 }
+        $src.Foreground = if ($from -eq 'My groups') { $accent } else { $soft }
+        $src.ToolTip = switch ($from) { 'My groups' { 'From your My groups list' } 'Guessed' { 'Guessed from the image and service name' } default { 'No suggestion' } }
+        Add-AutoGroupCell $grid $src $n 3
+        [void]$f.Items.Add(@{ Service = $r.Service; Box = $box; From = $from; Suggested = $group; FromText = $src })
         $n++
     }
-    $w.FindName('TxtAgInfo').Text = ("{0} container(s) have no {1}.group label. {2} got a group from their image name; the rest are empty. Change any group, type a new one, or clear it to leave that container ungrouped." -f $rows.Count, $prefix, $suggested)
+    $w.FindName('TxtAgInfo').Text = ("{0} container(s) have no {1}.group label. {2} got their group from My groups and {3} were guessed from the image name; the rest are empty. Change any group, type a new one, or clear it to leave that container ungrouped." -f $rows.Count, $prefix, $fromMine, $suggested)
     $w.FindName('TxtAgUsed').Text = if ($known.Used.Count) { 'Groups already in the file: ' + ($known.Used -join ', ') } else { '' }
     $note = "Save adds a $prefix.group label to each container with a group, after a backup of the compose file. Nothing else in the file changes. Those containers then show Changed until you press Apply changes."
     if (Get-Machine) { $note += " They run on $(Get-MachineName), so press Send before Apply changes." }
     $f.Note.Text = $note
     $f.Save.Add_Click({ Save-AutoGroups })
+    $f.Mine = $w.FindName('ChkAgMine')
+    $w.FindName('BtnAgMine').Add_Click({
+            Show-MyGroups $script:AutoGroupForm.Window
+            Update-AutoGroupFromMine
+        })
     $script:AutoGroupForm = $f
     [void]$w.ShowDialog()
     $script:AutoGroupForm = $null
@@ -6360,6 +6404,23 @@ function Invoke-SaveGroupsNext([scriptblock]$Next) {
         }, [Windows.Threading.DispatcherPriority]::Background)
 }
 
+# After My groups was changed: use it for every row whose group you haven't changed by hand.
+function Update-AutoGroupFromMine {
+    $f = $script:AutoGroupForm
+    if (-not $f) { return }
+    $mine = Get-MyGroupsMap
+    if (-not $mine) { return }
+    $n = 0
+    foreach ($x in $f.Items) {
+        $k = $x.Service.ToLowerInvariant()
+        if (-not $mine.ContainsKey($k) -or $x.Box.Text.Trim() -ne $x.Suggested -or $mine[$k] -eq $x.Suggested) { continue }
+        $x.Box.Text = $mine[$k]; $x.Suggested = $mine[$k]; $x.From = 'My groups'
+        $x.FromText.Text = 'My groups'; $x.FromText.Foreground = $f.Window.FindResource('Accent'); $x.FromText.ToolTip = 'From your My groups list'
+        $n++
+    }
+    if ($n) { $f.Note.Text = "$n group(s) now come from My groups." }
+}
+
 function Save-AutoGroups {
     $f = $script:AutoGroupForm
     if (-not $f -or $script:AutoGroupSave) { return }
@@ -6477,6 +6538,30 @@ function Save-AutoGroupsFile {
     Invoke-SaveGroupsNext { Complete-SaveGroups }
 }
 
+# "Also add ... to My groups": each saved container that isn't in My groups yet.
+# Returns a sentence for the message at the end ('' when nothing was added).
+function Add-SavedToMyGroups($Save) {
+    try {
+        $list = Read-MyGroups
+        if ($null -eq $list) { $list = New-Object System.Collections.ArrayList }
+        $have = @{}
+        foreach ($e in $list) { $have[$e.Service.ToLowerInvariant()] = $true }
+        $added = 0
+        foreach ($svc in $Save.Done) {
+            if ($have.ContainsKey($svc.ToLowerInvariant())) { continue }
+            [void]$list.Add((New-Object Dcm.MyGroupEntry -Property @{ Service = $svc; Group = $Save.Want[$svc] }))
+            $added++
+        }
+        if (-not $added) { return '' }
+        Save-MyGroupsFile @($list)
+        Write-Activity "My groups: added $added container(s) from Group automatically."
+        return "`n`nAlso added $added of them to My groups."
+    } catch {
+        Write-Activity "My groups: couldn't add the new groups: $($_.Exception.Message)"
+        return "`n`nThey couldn't be added to My groups: $($_.Exception.Message)"
+    }
+}
+
 # Step 6, then close the box and say how it went.
 function Complete-SaveGroups {
     $s = $script:AutoGroupSave
@@ -6487,11 +6572,398 @@ function Complete-SaveGroups {
     if ($script:SaveGroupsBox) { $script:SaveGroupsBox.Busy = $false; $script:SaveGroupsBox.Window.Close() }
     Show-Finished @(@{ Label = "Save groups: $($s.Label) added to $($s.Done.Count) container(s)"; Failed = $false; Cancelled = $false; Error = '' })
     $msg = "Added a group to $($s.Done.Count) container(s)."
+    if ($f -and $f.Mine -and $f.Mine.IsChecked) { $msg += Add-SavedToMyGroups $s }
     if ($s.Skipped.Count) { $msg += "`n`nLeft as they were:`n" + ($s.Skipped -join "`n") }
     $msg += "`n`nThey show Changed until you press Apply changes, which recreates them. Their data is kept."
     if (Get-Machine) { $msg += " They run on $(Get-MachineName), so press Send first." }
     if ($f) { $f.Window.Close() }
     [void][Windows.MessageBox]::Show($window, $msg, 'Group automatically', 'OK', 'Information')
+}
+
+# ---------------------------------------------------------------------------
+# My groups: your own list of which group each container goes in, kept on this
+# PC (my-groups.txt in the settings folder, one "service | Group" per line).
+# Group automatically uses it first, so a new compose file gets the groups you
+# always use. Filled from a compose file's labels, by hand, or from Group
+# automatically. The app never writes it without being asked.
+# ---------------------------------------------------------------------------
+$script:MyGroupsPath = Join-Path $script:SettingsDir 'my-groups.txt'
+$script:MyGroupsAuto = $true   # make my-groups.txt from the first compose file loaded, when there isn't one
+
+# The entries in the file, in file order ($null when there's no file yet).
+function Read-MyGroups {
+    $p = $script:MyGroupsPath
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return $null }
+    $list = New-Object System.Collections.ArrayList
+    foreach ($line in [IO.File]::ReadAllLines($p)) {
+        $t = $line.Trim()
+        if (-not $t -or $t.StartsWith('#')) { continue }
+        $parts = $t -split '\|', 2
+        if ($parts.Count -lt 2) { continue }
+        $svc = $parts[0].Trim(); $grp = $parts[1].Trim()
+        if ($svc -and $grp) { [void]$list.Add((New-Object Dcm.MyGroupEntry -Property @{ Service = $svc; Group = $grp })) }
+    }
+    return , $list
+}
+
+# service (lower case) -> group, the first line winning; $null when there's no file.
+function Get-MyGroupsMap {
+    $list = Read-MyGroups
+    if ($null -eq $list) { return $null }
+    $map = @{}
+    foreach ($e in $list) { $k = $e.Service.ToLowerInvariant(); if (-not $map.ContainsKey($k)) { $map[$k] = $e.Group } }
+    return $map
+}
+
+# Writes the list (sorted by container), after copying the old file to my-groups.bak.txt.
+function Save-MyGroupsFile([object[]]$Entries) {
+    $p = $script:MyGroupsPath
+    $dir = Split-Path -Parent $p
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination (Join-Path $dir 'my-groups.bak.txt') -Force }
+    $lines = @(
+        '# My groups for Docker Container Manager. This file stays on this PC.',
+        '# One container per line: its service name, a | and its group, for example:',
+        '#   web | Websites',
+        '# Group automatically uses these first. Capitals and spaces around the | don''t matter.',
+        '# Lines starting with # are ignored.',
+        ''
+    ) + @($Entries | Sort-Object { $_.Service } | ForEach-Object { '{0} | {1}' -f $_.Service.Trim(), $_.Group.Trim() })
+    $tmp = $p + '.dcm-tmp'
+    [IO.File]::WriteAllText($tmp, (($lines -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding $false))
+    Move-Item -LiteralPath $tmp -Destination $p -Force
+}
+
+# The groups the loaded compose file gives its services (from its labels; nothing is written).
+function Get-ComposeGroups {
+    $map = [ordered]@{}
+    foreach ($r in @($script:Rows | Where-Object { $_.InCompose -and $_.Group -and $_.Group -ne $script:UngroupedName } | Sort-Object Service)) {
+        if (-not $map.Contains($r.Service)) { $map[$r.Service] = $r.Group }
+    }
+    return $map
+}
+
+# The My groups list built into the exe (Source\my-groups.txt when it was built), or,
+# running from source, Source\my-groups.txt itself. $null when there's none.
+function Get-BuiltInMyGroups {
+    if ($script:EmbeddedAssets.ContainsKey('my-groups.txt')) { return [Convert]::FromBase64String($script:EmbeddedAssets['my-groups.txt']) }
+    if ($PSScriptRoot) {
+        $p = Join-Path (Split-Path -Parent $PSScriptRoot) 'my-groups.txt'
+        if (Test-Path -LiteralPath $p -PathType Leaf) { return [IO.File]::ReadAllBytes($p) }
+    }
+    return $null
+}
+
+# How many containers a my-groups.txt (as bytes) lists.
+function Get-MyGroupsCount([byte[]]$Bytes) {
+    $text = (New-Object Text.UTF8Encoding $false).GetString($Bytes)
+    return @($text -split "`r?`n" | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') -and $_.Contains('|') }).Count
+}
+
+# First use: when there's no my-groups.txt yet, it's made from the built-in list or,
+# without one, from the group labels of the compose file that's loaded (once it has
+# some). Activity says which. Nothing to answer, and an existing file is never replaced.
+# Returns $true when a file exists afterwards.
+function Initialize-MyGroupsFile {
+    if (Test-Path -LiteralPath $script:MyGroupsPath -PathType Leaf) { return $true }
+    $builtIn = Get-BuiltInMyGroups
+    if ($builtIn) {
+        try {
+            $dir = Split-Path -Parent $script:MyGroupsPath
+            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            [IO.File]::WriteAllBytes($script:MyGroupsPath, $builtIn)
+            Write-Activity "My groups: made $script:MyGroupsPath from the built-in list ($(Get-MyGroupsCount $builtIn) containers). Settings > My groups... shows it."
+            return $true
+        } catch { Write-Activity "My groups: couldn't write the built-in list: $($_.Exception.Message)" }
+    }
+    $groups = Get-ComposeGroups
+    if (-not $groups.Count) { return $false }
+    try {
+        Save-MyGroupsFile @($groups.Keys | ForEach-Object { New-Object Dcm.MyGroupEntry -Property @{ Service = $_; Group = $groups[$_] } })
+        Write-Activity "My groups: made $script:MyGroupsPath from the $($groups.Count) group label(s) in the compose file. Settings > My groups... shows it."
+        return $true
+    } catch {
+        Write-Activity "My groups: couldn't make $($script:MyGroupsPath): $($_.Exception.Message)"
+        return $false
+    }
+}
+$myGroupsXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="My groups" Width="680" Height="600" MinWidth="560" MinHeight="380" WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <DockPanel Margin="14">
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <TextBlock Text="My groups" FontSize="18" FontWeight="SemiBold"/>
+            <TextBlock Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" Margin="0,2,0,0"
+                       Text="The group you use for each container. Group automatically uses this list first, then guesses from the image name. Double-click a cell (or press F2) to change it."/>
+        </StackPanel>
+        <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBox x:Name="TxtMgFilter" Style="{StaticResource Field}" ToolTip="Show only containers or groups containing this text" Margin="0,0,10,0"/>
+            <TextBlock x:Name="TxtMgFilterHint" Text="Filter" Foreground="{StaticResource SoftInk}" IsHitTestVisible="False" VerticalAlignment="Center" Margin="9,0,0,0"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button x:Name="BtnMgAdd" Content="Add" Tag="&#xE710;" Style="{StaticResource Btn}" ToolTip="Add a row for a container"/>
+                <Button x:Name="BtnMgRemove" Content="Remove" Tag="&#xE74D;" Style="{StaticResource Btn}" ToolTip="Remove the selected rows from the list (Delete)"/>
+                <Button x:Name="BtnMgUpdate" Content="Update from current compose file" Tag="&#xE72C;" Style="{StaticResource Btn}" Margin="0"
+                        ToolTip="Read the group labels in the compose file that's open now (it isn't changed). New containers are added; you're asked before any group here changes."/>
+            </StackPanel>
+        </Grid>
+        <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBlock x:Name="TxtMgNote" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button x:Name="BtnMgReset" Content="Reset to built-in list..." Tag="&#xE777;" Style="{StaticResource Btn}"
+                        ToolTip="Replace this list with the one built into the app. Asks first; your list is kept as my-groups.bak.txt."/>
+                <Button x:Name="BtnMgEditor" Content="Open in editor" Tag="&#xE70F;" Style="{StaticResource Btn}" ToolTip="Open my-groups.txt in your editor (from Settings)"/>
+                <Button x:Name="BtnMgFolder" Content="Open folder" Tag="&#xE838;" Style="{StaticResource Btn}" ToolTip="Show my-groups.txt in File Explorer"/>
+                <Button x:Name="BtnMgSave" Content="Save" Tag="&#xE74E;" Style="{StaticResource PrimaryBtn}" ToolTip="Save the list (the old one is kept as my-groups.bak.txt)"/>
+                <Button x:Name="BtnMgClose" Content="Close" Style="{StaticResource Btn}" IsCancel="True" Margin="0"/>
+            </StackPanel>
+        </Grid>
+        <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="2">
+            <Grid>
+                <DataGrid x:Name="GridMg" AutoGenerateColumns="False" HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
+                          Background="Transparent" SelectionMode="Extended" SelectionUnit="FullRow" CanUserAddRows="False" CanUserDeleteRows="False"
+                          CanUserSortColumns="True" RowHeight="28">
+                    <DataGrid.RowStyle>
+                        <Style TargetType="DataGridRow">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderThickness" Value="4,0,0,0"/>
+                            <Setter Property="BorderBrush" Value="Transparent"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="{DynamicResource Hover}"/>
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background" Value="{DynamicResource Selected}"/>
+                                    <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGrid.RowStyle>
+                    <DataGrid.CellStyle>
+                        <Style TargetType="DataGridCell">
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="DataGridCell">
+                                        <Border Padding="8,0" Background="Transparent">
+                                            <ContentPresenter VerticalAlignment="Center"/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </DataGrid.CellStyle>
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Container" Binding="{Binding Service, UpdateSourceTrigger=LostFocus}" SortMemberPath="Service" Width="*"/>
+                        <DataGridTextColumn Header="Group" Binding="{Binding Group, UpdateSourceTrigger=LostFocus}" SortMemberPath="Group" Width="*"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+                <TextBlock x:Name="TxtMgEmpty" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="20"
+                           Foreground="{StaticResource SoftInk}" Visibility="Collapsed"/>
+            </Grid>
+        </Border>
+    </DockPanel>
+</Window>
+'@
+
+function Update-MyGroupsNote {
+    $g = $script:MyGroupsForm
+    if (-not $g) { return }
+    $n = $g.List.Count
+    $shown = @($g.View).Count
+    $where = if (Test-Path -LiteralPath $script:MyGroupsPath) { "Saved in $script:MyGroupsPath" } else { "Not saved yet. Save makes $script:MyGroupsPath" }
+    $count = if ($shown -ne $n) { "$shown of $n shown" } else { "$n container(s)" }
+    $g.Note.Text = "$count$(if ($g.Dirty) { ' - not saved yet' }).  $where"
+    $g.Empty.Text = if ($n) { 'Nothing matches the filter.' } else { "No containers yet.`nPress Update from current compose file, or Add." }
+    $g.Empty.Visibility = if ($shown) { 'Collapsed' } else { 'Visible' }
+    $g.Window.Title = 'My groups' + $(if ($g.Dirty) { ' *' } else { '' })
+}
+
+function Set-MyGroupsDirty { if ($script:MyGroupsForm) { $script:MyGroupsForm.Dirty = $true; Update-MyGroupsNote } }
+
+# Adds the compose file's groups: new containers straight in, changed groups only after asking.
+function Update-MyGroupsFromCompose {
+    $g = $script:MyGroupsForm
+    [void]$g.Grid.CommitEdit()
+    $groups = Get-ComposeGroups
+    if (-not $groups.Count) { [void][Windows.MessageBox]::Show($g.Window, 'The compose file open now has no group labels to add.', 'My groups', 'OK', 'Information'); return }
+    $have = @{}
+    foreach ($e in $g.List) { if ($e.Service) { $have[$e.Service.Trim().ToLowerInvariant()] = $e } }
+    $new = New-Object System.Collections.ArrayList
+    $changed = New-Object System.Collections.ArrayList
+    foreach ($svc in $groups.Keys) {
+        $e = $have[$svc.ToLowerInvariant()]
+        if (-not $e) { [void]$new.Add($svc) }
+        elseif ($e.Group.Trim() -ne $groups[$svc]) { [void]$changed.Add($svc) }
+    }
+    if (-not $new.Count -and -not $changed.Count) { $g.Note.Text = 'My groups already has every group in the compose file.'; return }
+    $doChange = $false
+    if ($changed.Count) {
+        $shown = @($changed | Select-Object -First 20 | ForEach-Object { "$($_):  $($have[$_.ToLowerInvariant()].Group.Trim())  ->  $($groups[$_])" }) -join "`n"
+        if ($changed.Count -gt 20) { $shown += "`n... and $($changed.Count - 20) more" }
+        $q = "The compose file gives $($changed.Count) container(s) a different group from My groups:`n`n$shown`n`nChange them to the compose file's group?`n`nYes: change them$(if ($new.Count) { " and add the $($new.Count) new one(s)" }).`nNo: keep My groups as it is$(if ($new.Count) { " and only add the new one(s)" }).`nCancel: change nothing."
+        $a = [Windows.MessageBox]::Show($g.Window, $q, 'My groups', 'YesNoCancel', 'Question')
+        if ($a -eq 'Cancel') { return }
+        $doChange = ($a -eq 'Yes')
+    }
+    foreach ($svc in $new) { $g.List.Add((New-Object Dcm.MyGroupEntry -Property @{ Service = $svc; Group = $groups[$svc] })) }
+    if ($doChange) { foreach ($svc in $changed) { $have[$svc.ToLowerInvariant()].Group = $groups[$svc] } }
+    $g.View.Refresh()
+    if ($new.Count -or $doChange) { Set-MyGroupsDirty }
+    $g.Note.Text = "Added $($new.Count)$(if ($doChange) { ", changed $($changed.Count)" }) from the compose file. Press Save to keep them."
+}
+
+# Saves the window's list. Returns $true when it was saved.
+function Save-MyGroupsWindow {
+    $g = $script:MyGroupsForm
+    [void]$g.Grid.CommitEdit()
+    [void]$g.Grid.CommitEdit()
+    $keep = New-Object System.Collections.ArrayList
+    $problems = New-Object System.Collections.ArrayList
+    $seen = @{}
+    foreach ($e in $g.List) {
+        $svc = ([string]$e.Service).Trim(); $grp = ([string]$e.Group).Trim()
+        if (-not $svc -and -not $grp) { continue }
+        if (-not $svc) { [void]$problems.Add("A row has the group $grp but no container."); continue }
+        if (-not $grp) { [void]$problems.Add("$svc has no group."); continue }
+        if ($svc.Contains('|')) { [void]$problems.Add("$svc has a | in its name."); continue }
+        $k = $svc.ToLowerInvariant()
+        if ($seen.ContainsKey($k)) { [void]$problems.Add("$svc is in the list twice."); continue }
+        $seen[$k] = $true
+        [void]$keep.Add((New-Object Dcm.MyGroupEntry -Property @{ Service = $svc; Group = $grp }))
+    }
+    if ($problems.Count) {
+        $shown = @($problems | Select-Object -First 15) -join "`n"
+        [void][Windows.MessageBox]::Show($g.Window, "Nothing was saved. Fix these first:`n`n$shown", 'My groups', 'OK', 'Warning')
+        return $false
+    }
+    try { Save-MyGroupsFile @($keep) }
+    catch { [void][Windows.MessageBox]::Show($g.Window, "Couldn't save My groups: $($_.Exception.Message)", 'My groups', 'OK', 'Error'); return $false }
+    Write-Activity "My groups: saved $($keep.Count) container(s) to $script:MyGroupsPath."
+    # Show it as saved: tidied and sorted the way the file is.
+    $g.List.Clear()
+    foreach ($e in @($keep | Sort-Object Service)) { $g.List.Add($e) }
+    $g.Dirty = $false
+    Update-MyGroupsNote
+    return $true
+}
+
+function Show-MyGroups($Owner) {
+    if (-not $Owner) { $Owner = $window }
+    if ($script:MyGroupsForm) { [void]$script:MyGroupsForm.Window.Activate(); return }
+    [void](Initialize-MyGroupsFile)
+    $w = New-XamlObject $myGroupsXaml
+    $w.Owner = $Owner
+    if ($window.Icon) { $w.Icon = $window.Icon }
+    $list = New-Object 'System.Collections.ObjectModel.ObservableCollection[Dcm.MyGroupEntry]'
+    $read = Read-MyGroups
+    if ($read) { foreach ($e in $read) { $list.Add($e) } }
+    $g = @{ Window = $w; List = $list; Dirty = $false; Grid = $w.FindName('GridMg'); Note = $w.FindName('TxtMgNote'); Empty = $w.FindName('TxtMgEmpty'); Filter = $w.FindName('TxtMgFilter'); Hint = $w.FindName('TxtMgFilterHint') }
+    $g.Grid.ItemsSource = $list
+    $g.View = [Windows.Data.CollectionViewSource]::GetDefaultView($list)
+    $script:MyGroupsForm = $g
+    # Setting the filter runs it straight away, so the form must be known first.
+    $g.View.Filter = [Predicate[object]] {
+        param($o)
+        $s = $script:MyGroupsForm
+        $t = if ($s) { $s.Filter.Text.Trim() } else { '' }
+        if (-not $t) { return $true }
+        return ([string]$o.Service).IndexOf($t, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or ([string]$o.Group).IndexOf($t, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    }
+    $g.Filter.Add_TextChanged({
+            $s = $script:MyGroupsForm
+            $s.Hint.Visibility = if ($s.Filter.Text) { 'Collapsed' } else { 'Visible' }
+            [void]$s.Grid.CommitEdit(); [void]$s.Grid.CommitEdit()
+            $s.View.Refresh()
+            Update-MyGroupsNote
+        })
+    $g.Grid.Add_CellEditEnding({ param($s, $e) if ($e.EditAction -eq 'Commit') { Set-MyGroupsDirty } })
+    $g.Grid.Add_PreviewKeyDown({
+            param($s, $e)
+            if ($e.Key -eq 'Delete' -and -not ($e.OriginalSource -is [Windows.Controls.TextBox])) { Remove-MyGroupsSelected; $e.Handled = $true }
+        })
+    $w.FindName('BtnMgAdd').Add_Click({
+            $s = $script:MyGroupsForm
+            [void]$s.Grid.CommitEdit(); [void]$s.Grid.CommitEdit()
+            $s.Filter.Text = ''
+            $e = New-Object Dcm.MyGroupEntry -Property @{ Service = ''; Group = '' }
+            $s.List.Add($e)
+            Set-MyGroupsDirty
+            $s.Grid.SelectedItem = $e
+            $s.Grid.ScrollIntoView($e)
+            $s.Grid.CurrentCell = New-Object Windows.Controls.DataGridCellInfo($e, $s.Grid.Columns[0])
+            [void]$s.Grid.Focus()
+            [void]$s.Grid.BeginEdit()
+        })
+    $w.FindName('BtnMgRemove').Add_Click({ Remove-MyGroupsSelected })
+    $w.FindName('BtnMgUpdate').Add_Click({ Update-MyGroupsFromCompose })
+    $reset = $w.FindName('BtnMgReset')
+    if (Get-BuiltInMyGroups) { $reset.Add_Click({ Reset-MyGroups }) } else { $reset.Visibility = 'Collapsed' }
+    $w.FindName('BtnMgSave').Add_Click({ [void](Save-MyGroupsWindow) })
+    $w.FindName('BtnMgClose').Add_Click({ $script:MyGroupsForm.Window.Close() })
+    $w.FindName('BtnMgEditor').Add_Click({
+            $s = $script:MyGroupsForm
+            if (-not (Test-Path -LiteralPath $script:MyGroupsPath)) { [void][Windows.MessageBox]::Show($s.Window, 'There''s no my-groups.txt yet. Press Save first.', 'My groups', 'OK', 'Information'); return }
+            if ($s.Dirty) { [void][Windows.MessageBox]::Show($s.Window, 'The editor shows the saved file. Your changes here aren''t saved yet.', 'My groups', 'OK', 'Information') }
+            Open-InEditor $script:MyGroupsPath
+        })
+    $w.FindName('BtnMgFolder').Add_Click({
+            $p = $script:MyGroupsPath
+            if (Test-Path -LiteralPath $p) { Start-Process -FilePath 'explorer.exe' -ArgumentList "/select,`"$p`"" }
+            elseif (Test-Path -LiteralPath (Split-Path -Parent $p)) { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$(Split-Path -Parent $p)`"" }
+        })
+    $w.Add_Closing({
+            param($src, $e)
+            $s = $script:MyGroupsForm
+            if (-not $s) { return }
+            [void]$s.Grid.CommitEdit(); [void]$s.Grid.CommitEdit()
+            if (-not $s.Dirty) { return }
+            $a = [Windows.MessageBox]::Show($s.Window, 'Save the changes to My groups?', 'My groups', 'YesNoCancel', 'Question')
+            if ($a -eq 'Cancel' -or ($a -eq 'Yes' -and -not (Save-MyGroupsWindow))) { $e.Cancel = $true }
+        })
+    $w.Add_Closed({ $script:MyGroupsForm = $null })
+    Update-MyGroupsNote
+    [void]$w.ShowDialog()
+}
+
+# Replaces my-groups.txt with the built-in list, after asking and a backup.
+function Reset-MyGroups {
+    $s = $script:MyGroupsForm
+    $builtIn = Get-BuiltInMyGroups
+    if (-not $s -or -not $builtIn) { return }
+    [void]$s.Grid.CommitEdit(); [void]$s.Grid.CommitEdit()
+    $q = "Replace My groups with the list built into the app ($(Get-MyGroupsCount $builtIn) containers)?"
+    $q += if (Test-Path -LiteralPath $script:MyGroupsPath) { "`n`nYour list now is kept as my-groups.bak.txt in the same folder." } else { '' }
+    if ($s.Dirty) { $q += "`n`nChanges here that aren't saved are lost." }
+    if ([Windows.MessageBox]::Show($s.Window, $q, 'My groups', 'YesNo', 'Warning', 'No') -ne 'Yes') { return }
+    try {
+        $dir = Split-Path -Parent $script:MyGroupsPath
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        if (Test-Path -LiteralPath $script:MyGroupsPath) { Copy-Item -LiteralPath $script:MyGroupsPath -Destination (Join-Path $dir 'my-groups.bak.txt') -Force }
+        [IO.File]::WriteAllBytes($script:MyGroupsPath, $builtIn)
+    } catch { [void][Windows.MessageBox]::Show($s.Window, "Couldn't reset My groups: $($_.Exception.Message)", 'My groups', 'OK', 'Error'); return }
+    Write-Activity 'My groups: replaced with the built-in list (the old one is my-groups.bak.txt).'
+    $s.List.Clear()
+    $read = Read-MyGroups
+    if ($read) { foreach ($x in $read) { $s.List.Add($x) } }
+    $s.Dirty = $false
+    $s.View.Refresh()
+    Update-MyGroupsNote
+    $s.Note.Text = "Reset to the built-in list ($($s.List.Count) containers). Your old list is my-groups.bak.txt."
+}
+
+function Remove-MyGroupsSelected {
+    $s = $script:MyGroupsForm
+    $sel = @($s.Grid.SelectedItems | Where-Object { $_ -is [Dcm.MyGroupEntry] })
+    if (-not $sel.Count) { return }
+    [void]$s.Grid.CancelEdit()
+    foreach ($e in $sel) { [void]$s.List.Remove($e) }
+    Set-MyGroupsDirty
 }
 
 # ---------------------------------------------------------------------------
@@ -6879,6 +7351,7 @@ $script:HelpTopics = [ordered]@{
         'When some containers have no group, the bar above the list shows Group automatically. It suggests a group for each one from its image name, reusing the groups already in your file.',
         '- Change any group, type a new one, or clear it to leave that container ungrouped.',
         '- Save groups adds one label line to each of them (after a backup) and changes nothing else. A Saving groups box shows each step; if one fails, the file is left as it was.',
+        '- My groups (in Group automatically and Settings) is your own list of which group each container goes in, kept on this PC as my-groups.txt. Group automatically uses it first and only guesses the rest; the From column says which. Update from current compose file fills it from the labels you already have.',
         '- The containers then show Changed until you press Apply changes. On another machine, press Send first.'
     )
     'Portainer' = @(
@@ -6916,7 +7389,7 @@ $script:HelpTopics = [ordered]@{
     )
     'Settings and files' = @(
         'Settings sets the label prefix, how often the status is checked, the editor (Check says whether it''s there and suggests one if not), the theme, the tray, app icons, update checks, the progress window and the Finished box.',
-        '- Settings (settings.json), your source links (source-links.txt) and backups of the compose file and .env (Backups) are in %APPDATA%\Docker Container Manager.',
+        '- Settings (settings.json), your source links (source-links.txt), My groups (my-groups.txt, with my-groups.bak.txt from the save before) and backups of the compose file and .env (Backups) are in %APPDATA%\Docker Container Manager.',
         '- Downloaded icons are in %LOCALAPPDATA%\Docker Container Manager\Icons.',
         'Nothing is installed: delete that folder to start again.'
     )
@@ -7857,6 +8330,8 @@ if (-not (Test-DockerReady)) { $script:DockerState = 'missing' }
 try { $script:Tray = New-Tray } catch { $script:Tray = $null; Write-Verbose "No tray icon: $($_.Exception.Message)" }
 
 Write-Activity "$script:AppName v$script:AppVersion"
+# No My groups list yet? Start it from the built-in one (when the exe has one).
+[void](Initialize-MyGroupsFile)
 if ($script:DockerExe) { Write-Activity "Using $script:DockerExe" } else { Write-Activity "docker.exe wasn't found. Install Docker Desktop, then press Try again." }
 
 Set-ViewMode $script:Settings.ViewMode

@@ -20,7 +20,8 @@ exit /b %BUILD_RESULT%
 #   1. checks $script:AppVersion in the script matches the newest CHANGELOG entry,
 #   2. runs PSScriptAnalyzer if it's installed (stops on errors, shows warnings),
 #   3. writes one script to %TEMP% with the icon and logo pasted in as base64,
-#      so the exe needs no other files,
+#      so the exe needs no other files (plus my-groups.txt from this folder, if
+#      it's there, as the built-in My groups list),
 #   4. installs ps2exe for the current user if it's missing, then compiles the
 #      script with -STA -noConsole and the icon into the project's Builds
 #      folder (next to Source, outside the repo).
@@ -47,6 +48,7 @@ $script     = Join-Path $here 'src\Docker-Container-Manager.ps1'
 $assetsDir  = Join-Path $here 'assets'
 $iconPath   = Join-Path $assetsDir 'Docker-Container-Manager.ico'
 $logoPath   = Join-Path $assetsDir 'Docker-Container-Manager.png'
+$groupsPath = Join-Path $here 'my-groups.txt'
 $changelog  = Join-Path $here 'CHANGELOG.md'
 $buildsDir  = Join-Path (Split-Path -Parent $here) 'Builds'
 $logPath    = Join-Path $here 'Build-Exe.log'
@@ -95,13 +97,21 @@ try {
     $endTag = '#endregion BUNDLE-ASSETS'
     $end = $text.IndexOf($endTag)
     if ($start -lt 0 -or $end -lt $start) { throw "Couldn't find the BUNDLE-ASSETS region in the script." }
-    $region = @(
+    $lines = @(
         '# Embedded by Build-Exe.cmd',
         '$script:EmbeddedAssets = @{',
         "    'Docker-Container-Manager.ico' = '$([Convert]::ToBase64String([IO.File]::ReadAllBytes($iconPath)))'",
-        "    'Docker-Container-Manager.png' = '$([Convert]::ToBase64String([IO.File]::ReadAllBytes($logoPath)))'",
-        '}'
-    ) -join "`r`n"
+        "    'Docker-Container-Manager.png' = '$([Convert]::ToBase64String([IO.File]::ReadAllBytes($logoPath)))'"
+    )
+    # The groups list, if it's here: the app starts with it on a PC that has none.
+    if (Test-Path -LiteralPath $groupsPath -PathType Leaf) {
+        $lines += "    'my-groups.txt' = '$([Convert]::ToBase64String([IO.File]::ReadAllBytes($groupsPath)))'"
+        $count = @([IO.File]::ReadAllLines($groupsPath) | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') -and $_.Contains('|') }).Count
+        Write-Host "Including my-groups.txt as the built-in My groups list ($count containers)."
+    } else {
+        Write-Host 'No my-groups.txt here, so the exe has no built-in My groups list.'
+    }
+    $region = ($lines + '}') -join "`r`n"
     $bundle = $text.Substring(0, $start) + $region + $text.Substring($end + $endTag.Length)
     [IO.File]::WriteAllText($bundlePath, $bundle, (New-Object System.Text.UTF8Encoding($true)))
 
@@ -156,6 +166,7 @@ try {
     Write-Host "Build failed: $($_.Exception.Message)" -ForegroundColor Red
 }
 
+Remove-Item -LiteralPath $bundlePath -Force -ErrorAction SilentlyContinue
 try { Stop-Transcript | Out-Null } catch { Write-Verbose 'No transcript.' }
 
 if ($failed) { [Environment]::Exit(1) }

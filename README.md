@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.09-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.10-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -55,7 +55,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-**Exe:** download `Docker Container Manager v1.09.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
+**Exe:** download `Docker Container Manager v1.10.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
 
 **Script:** clone this repo and run `Start Docker Container Manager.cmd`. It starts `src\Docker-Container-Manager.ps1` with the execution policy bypassed for that run only.
 
@@ -146,6 +146,14 @@ Change any group, type a new one, or clear it to leave that service ungrouped, t
 A small **Saving groups** box shows each step as it happens, with a progress bar. If a step fails, it says why and the compose file is left as it was; when everything worked it closes and the Finished box says so.
 
 Services that already have a group are never touched. The grouped services show **Changed** until you press **Apply changes**; with another machine picked, press **Send** first.
+
+### My groups
+
+If you use the same containers in more than one compose file, keep your own list of which group each one goes in. **My groups...** (in Group automatically, or the link in Settings) opens it: a sortable list of containers and groups that you can filter, add to, change and remove from. **Update from current compose file** reads the group labels in the compose file that's open (without changing it), adds the containers that aren't in the list and asks before changing any group that's already there. **Open in editor** and **Open folder** show the file itself.
+
+Group automatically uses My groups first and only guesses the containers that aren't in it; the **From** column says which. **Also add the new groups to My groups** (ticked to start with) adds the groups you save there that aren't in the list yet, so next time they're used first. You don't have to make the list yourself. The build can include your own groups list: the `my-groups.txt` next to `Build-Exe.cmd` is put into the exe (edit it, or remove it for an exe without a built-in list). On a PC with no list yet, the app starts with that built-in list; without one, it makes the list from the group labels of the first compose file it loads. The Activity log says which, and an existing list is never replaced. **Reset to built-in list...** in the My groups window goes back to the built-in list (it asks first and keeps a backup).
+
+The list is a text file, `%APPDATA%\Docker Container Manager\my-groups.txt`, one `service | Group` per line (lines starting with `#` are ignored, and capitals and spaces around the `|` don't matter). It stays on your PC and is never sent anywhere. The list from before each save is kept as `my-groups.bak.txt`.
 
 ### Settings
 

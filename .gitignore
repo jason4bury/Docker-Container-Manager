@@ -5,6 +5,9 @@
 # Local config, logs and temp files (settings live in %APPDATA%\Docker Container Manager)
 config.local.json
 settings.json
+# my-groups.txt is the built-in My groups list and is kept in the repo; its backup isn't.
+my-groups.bak.txt
+source-links.txt
 *.log
 *.tmp
 

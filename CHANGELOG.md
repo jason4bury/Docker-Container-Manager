@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.10] - 2026-11-13
+
+### Added
+- **My groups**: your own list of which group each container goes in, kept on this PC as `%APPDATA%\Docker Container Manager\my-groups.txt`
+  (one `service | Group` per line; `#` lines are comments; matching ignores capitals and spaces).
+  It's ready the first time you need it (see below).
+- **My groups** window (from Group automatically and the link in Settings): a sortable, filterable list of containers and groups
+  with **Add**, **Remove** (or Delete) and in-place editing; **Update from current compose file** reads the open compose file's group
+  labels (read only), adds new containers and asks before changing any group already in the list; **Save** (the old list is kept as
+  `my-groups.bak.txt`), **Open in editor** and **Open folder**. It asks before closing with changes that aren't saved.
+- **Group automatically** uses My groups first and only guesses the rest. A new **From** column says *My groups* or *Guessed*,
+  **My groups...** opens the list (rows you haven't changed pick up what you change there), and **Also add the new groups to My groups** (on by default)
+  adds the saved containers that aren't in the list yet. Saving still goes through the Saving groups box.
+- The build can include your own groups list: the `my-groups.txt` next to `Build-Exe.cmd` is put into
+  the exe. When there's no my-groups.txt yet, the app starts with that built-in list or, without one, makes it from the group labels
+  of the first compose file it loads. No question to answer; the Activity log says which, and an existing list is never replaced.
+- **Reset to built-in list...** in the My groups window replaces the list with the built-in one, after asking and a backup.
+
 ## [1.09] - 2026-11-13
 
 ### Changed
