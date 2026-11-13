@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.03-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.04-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -49,7 +49,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-**Exe:** download `Docker Container Manager v1.03.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
+**Exe:** download `Docker Container Manager v1.04.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
 
 **Script:** clone this repo and run `Start Docker Container Manager.cmd`. It starts `src\Docker-Container-Manager.ps1` with the execution policy bypassed for that run only.
 
@@ -147,6 +147,8 @@ The list at the top left switches between **This PC** and other machines that ru
 | Project | The compose project name the containers were started with on that machine, if it isn't the folder's name (Synology Container Manager uses the project's name). **Test connection** lists the running projects. |
 | Docker command | Usually `docker`. The app also looks in `/usr/local/bin`, where Synology keeps it. |
 | Web pages on | The address used instead of `localhost` for web pages (the SSH address if empty). |
+
+The two lists at the top are captioned **Containers on** (which machine's Docker the app shows and controls) and **Compose file**. Each machine remembers the compose file on this PC you last used with it. With another machine picked, the compose file box reads **Send from:**, because that machine runs its own copy of the file (in its compose folder); the file on this PC is what **Send** copies there and what **Configure** edits. The usual routine for a NAS: pick it in **Containers on**, edit the master copy (**Edit** or **Configure**), press **Send**, then **Apply changes**.
 
 The app uses Windows' own `ssh.exe` with an SSH key, so it never asks for or stores a password. **SSH key help** in the Machines window shows the one-time setup, and **Test connection** checks it.
 

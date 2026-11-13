@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.04] - 2026-11-13
+
+### Changed
+- Each machine remembers its own compose file on this PC, so picking a machine also picks the file
+  you use with it.
+- With another machine picked, the compose file box reads **Send from:**, with a tooltip saying that
+  machine runs its own copy and this file is what Send copies there.
+- Captions above the two lists at the top: **Containers on** (the machine) and **Compose file**, which
+  becomes **Master copy here, sent to NAS** when another machine is picked.
+- The selected container's row is highlighted more strongly (the line at its start stays).
+- The **Send** button sits right next to the compose file list it sends from.
+- The Image column has more room (State and Since are a little narrower), and hovering over an image shows its full name.
+- The compose file path and the project each have their own line under the title, wide enough for a NAS path.
+
+### Fixed
+- Settings window: the **Show app icons** option and the editor path were cut off. The window is
+  wider and the option text is shorter.
+- The project name under the title was cut off. It now has its own line under the compose file path.
+- Selected and hovered rows weren't highlighted in the container list and the Configure, Check and Disk lists; they now are.
+- The Note column was too narrow for "Changed: recreate to apply"; it's wider and shows the full note as a tooltip.
+- In the container list, the Image column now fills the spare width (it was stuck at its narrowest), so full image names show; the other columns no longer start squeezed.
+
 ## [1.03] - 2026-11-12
 
 ### Added

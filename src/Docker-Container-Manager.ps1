@@ -29,10 +29,10 @@
     Opens the window with the last compose file used.
 
 .EXAMPLE
-    "Docker Container Manager v1.02.exe" -ComposeFile "D:\Docker\docker-compose.yml"
+    "Docker Container Manager v1.04.exe" -ComposeFile "D:\Docker\docker-compose.yml"
 
 .NOTES
-    Version:   1.02 (keep in step with CHANGELOG.md)
+    Version:   1.04 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -44,7 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.03'
+$script:AppVersion = '1.04'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 
 #region BUNDLE-ASSETS
@@ -364,6 +364,7 @@ function ConvertTo-Machine($Item) {
         EnvFile = & $get 'EnvFile'
         Docker  = & $get 'Docker'
         WebHost = & $get 'WebHost'
+        ComposeFile = & $get 'ComposeFile'
     }
     if (-not $m.Name -or -not $m.Login) { return $null }
     if (-not $m.Docker) { $m.Docker = 'docker' }
@@ -640,14 +641,14 @@ $script:Palettes = @{
     Light = @{
         Ink = '#1B2A3D'; SoftInk = '#5B6B80'; Page = '#F2F5F9'; Card = '#FFFFFF'; Edge = '#D9E1EA'; Accent = '#1769C2'
         AccentSoft = '#E3EFFC'; Navy = '#0E2238'; Ok = '#2DA44E'; Warn = '#D99A06'; Bad = '#CF2F3F'; Off = '#97A3B3'
-        Orphan = '#8250DF'; Hover = '#F3F7FC'; GroupHover = '#F0F4F9'; Selected = '#BFD9F7'; NoteInk = '#B07A00'
+        Orphan = '#8250DF'; Hover = '#F3F7FC'; GroupHover = '#F0F4F9'; Selected = '#B6D4F7'; NoteInk = '#B07A00'
         HeadA = '#0E2238'; HeadB = '#1769C2'; BadgeBg = '#DDF4E4'; BadgeInk = '#1A7F37'
         InfoBg = '#E3EFFC'; InfoEdge = '#9CC3F0'; WarnBg = '#FFF4D6'; WarnEdge = '#E8C66A'; ErrorBg = '#FDE3E6'; ErrorEdge = '#EBA2AA'
     }
     Dark = @{
         Ink = '#E6EDF3'; SoftInk = '#9AA8B8'; Page = '#161B22'; Card = '#1F2630'; Edge = '#333D4A'; Accent = '#4C9BEA'
         AccentSoft = '#23364D'; Navy = '#0B1220'; Ok = '#3FB950'; Warn = '#D8A31A'; Bad = '#F0626E'; Off = '#6E7B8B'
-        Orphan = '#A27BEA'; Hover = '#26303C'; GroupHover = '#26303C'; Selected = '#2B4A6E'; NoteInk = '#E3B341'
+        Orphan = '#A27BEA'; Hover = '#26303C'; GroupHover = '#26303C'; Selected = '#335F93'; NoteInk = '#E3B341'
         HeadA = '#0B1220'; HeadB = '#1A4F8A'; BadgeBg = '#1F3A28'; BadgeInk = '#56D364'
         InfoBg = '#1D3350'; InfoEdge = '#3B6A9E'; WarnBg = '#3A2F12'; WarnEdge = '#8A6D1E'; ErrorBg = '#3D1E24'; ErrorEdge = '#8F3A45'
     }
@@ -740,6 +741,7 @@ $script:SharedResources = @'
     </Style>
     <Style x:Key="HeaderBtn" TargetType="Button" BasedOn="{StaticResource Btn}">
         <Setter Property="Margin" Value="0,3,6,3"/>
+        <Setter Property="VerticalAlignment" Value="Bottom"/>
         <Setter Property="Background" Value="#22FFFFFF"/>
         <Setter Property="BorderBrush" Value="#44FFFFFF"/>
         <Setter Property="Foreground" Value="#FFFFFF"/>
@@ -1058,14 +1060,27 @@ $mainXaml = @'
                 <Image x:Name="ImgLogo" Width="44" Height="44" Margin="0,0,12,0" RenderOptions.BitmapScalingMode="HighQuality"/>
                 <StackPanel x:Name="HeaderTitle" Grid.Column="1" VerticalAlignment="Center" Margin="0,0,16,0">
                     <TextBlock Text="Docker Container Manager" FontSize="20" FontWeight="SemiBold" Foreground="#FFFFFF"/>
-                    <TextBlock x:Name="TxtSubtitle" Foreground="#CFE0F5" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" MaxWidth="300" HorizontalAlignment="Left"/>
+                    <TextBlock x:Name="TxtSubtitle" Foreground="#CFE0F5" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" MaxWidth="420" HorizontalAlignment="Left"/>
+                    <TextBlock x:Name="TxtProject" Foreground="#CFE0F5" TextTrimming="CharacterEllipsis" MaxWidth="420" HorizontalAlignment="Left"/>
                 </StackPanel>
                 <!-- The buttons wrap onto a second line when the window is narrow, so the title is never cut off. -->
                 <WrapPanel x:Name="HeaderButtons" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <ComboBox x:Name="CmbMachine" Width="150" Margin="0,3,6,3" VerticalContentAlignment="Center"
-                              ToolTip="Which machine's Docker to manage. Other machines are reached over SSH."/>
-                    <ComboBox x:Name="CmbRecent" Width="230" Margin="0,3,16,3" VerticalContentAlignment="Center"
-                              ToolTip="Switch to another compose file you've used on this PC"/>
+                    <!-- Captions above the two lists say what each one is for. -->
+                    <StackPanel Margin="0,0,6,0" VerticalAlignment="Bottom">
+                        <TextBlock Text="Containers on" FontSize="11" Foreground="#CFE0F5" Margin="2,0,0,0"/>
+                        <ComboBox x:Name="CmbMachine" Width="150" Margin="0,2,0,3" VerticalContentAlignment="Center"
+                                  ToolTip="Which machine's Docker to manage. Other machines are reached over SSH."/>
+                    </StackPanel>
+                    <!-- Send sits next to the file it sends. -->
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,0" VerticalAlignment="Bottom">
+                        <StackPanel x:Name="PnlRecent" VerticalAlignment="Bottom">
+                            <TextBlock x:Name="TxtRecentCaption" Text="Compose file" FontSize="11" MaxWidth="230" TextTrimming="CharacterEllipsis" Foreground="#CFE0F5" Margin="2,0,0,0"/>
+                            <ComboBox x:Name="CmbRecent" Width="230" Margin="0,2,0,3" VerticalContentAlignment="Center"
+                                      ToolTip="Switch to another compose file you've used on this PC"/>
+                        </StackPanel>
+                        <Button x:Name="BtnSend" Content="Send" Tag="&#xE898;" Style="{DynamicResource HeaderBtn}" Visibility="Collapsed" Margin="6,3,0,3"
+                                ToolTip="Copy the compose file and this machine's Env_ file (as .env) to the machine"/>
+                    </StackPanel>
                     <Button x:Name="BtnBrowse" Content="Compose file..." Tag="&#xE8E5;" Style="{DynamicResource HeaderBtn}"
                             ToolTip="Choose a docker-compose.yml"/>
                     <Button x:Name="BtnEditCompose" Content="Edit" Tag="&#xE70F;" Style="{DynamicResource HeaderBtn}"
@@ -1078,8 +1093,6 @@ $mainXaml = @'
                             ToolTip="How much space images, containers and the build cache use, and clean-up"/>
                     <Button x:Name="BtnFolder" Content="Folder" Tag="&#xE8B7;" Style="{DynamicResource HeaderBtn}"
                             ToolTip="Open the compose file's folder"/>
-                    <Button x:Name="BtnSend" Content="Send" Tag="&#xE898;" Style="{DynamicResource HeaderBtn}" Visibility="Collapsed"
-                            ToolTip="Copy the compose file and this machine's Env_ file (as .env) to the machine"/>
                     <Button x:Name="BtnSettings" Content="Settings" Tag="&#xE713;" Style="{DynamicResource HeaderBtn}"/>
                     <Button x:Name="BtnAbout" Content="About" Tag="&#xE946;" Style="{DynamicResource HeaderBtn}" Margin="0,3,0,3"/>
                 </WrapPanel>
@@ -1245,7 +1258,7 @@ $mainXaml = @'
                 <Border Grid.Row="2" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Edge}" BorderThickness="1" CornerRadius="8">
                     <Grid>
                         <DataGrid x:Name="Grid" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column"
-                                  GridLinesVisibility="None" BorderThickness="0" Background="Transparent" RowBackground="Transparent"
+                                  GridLinesVisibility="None" BorderThickness="0" Background="Transparent"
                                   SelectionMode="Extended" SelectionUnit="FullRow" CanUserResizeRows="False" CanUserReorderColumns="False"
                                   RowHeight="30" Margin="4">
                             <DataGrid.ColumnHeaderStyle>
@@ -1280,6 +1293,7 @@ $mainXaml = @'
                             </DataGrid.CellStyle>
                             <DataGrid.RowStyle>
                                 <Style TargetType="DataGridRow">
+                                    <Setter Property="Background" Value="Transparent"/>
                                     <Setter Property="ToolTip" Value="{Binding Description}"/>
                                     <Setter Property="BorderThickness" Value="4,0,0,0"/>
                                     <Setter Property="BorderBrush" Value="Transparent"/>
@@ -1369,8 +1383,8 @@ $mainXaml = @'
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
-                                <DataGridTextColumn Header="State" Binding="{Binding StateText}" Width="120" MinWidth="110"/>
-                                <DataGridTextColumn Header="Since" Binding="{Binding Since}" Width="120" MinWidth="110"/>
+                                <DataGridTextColumn Header="State" Binding="{Binding StateText}" Width="110" MinWidth="100"/>
+                                <DataGridTextColumn Header="Since" Binding="{Binding Since}" Width="110" MinWidth="100"/>
                                 <DataGridTemplateColumn Header="Web page" Width="140" MinWidth="120" SortMemberPath="Url">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
@@ -1381,12 +1395,12 @@ $mainXaml = @'
                                 </DataGridTemplateColumn>
                                 <DataGridTextColumn Header="Image" Binding="{Binding Image}" Width="*" MinWidth="150">
                                     <DataGridTextColumn.ElementStyle>
-                                        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource SoftInk}"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+                                        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource SoftInk}"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="ToolTip" Value="{Binding Image}"/></Style>
                                     </DataGridTextColumn.ElementStyle>
                                 </DataGridTextColumn>
-                                <DataGridTextColumn Header="Note" Binding="{Binding Note}" Width="190" MinWidth="170">
+                                <DataGridTextColumn Header="Note" Binding="{Binding Note}" Width="240" MinWidth="220">
                                     <DataGridTextColumn.ElementStyle>
-                                        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource NoteInk}"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+                                        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource NoteInk}"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="ToolTip" Value="{Binding Note}"/></Style>
                                     </DataGridTextColumn.ElementStyle>
                                 </DataGridTextColumn>
                             </DataGrid.Columns>
@@ -1571,7 +1585,7 @@ $mainXaml = @'
 
 $window = New-XamlObject $mainXaml
 $ui = @{}
-foreach ($name in 'ImgLogo', 'HeaderTitle', 'HeaderButtons', 'TxtSubtitle', 'CmbMachine', 'BtnSend', 'CmbRecent', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnDisk', 'BtnFolder', 'BtnSettings', 'BtnAbout',
+foreach ($name in 'ImgLogo', 'HeaderTitle', 'HeaderButtons', 'TxtSubtitle', 'TxtProject', 'CmbMachine', 'BtnSend', 'CmbRecent', 'PnlRecent', 'TxtRecentCaption', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnDisk', 'BtnFolder', 'BtnSettings', 'BtnAbout',
     'Banner', 'BannerGlyph', 'BannerText', 'CmbEnvTemplate', 'BannerAction', 'BannerRetry',
     'LstGroups', 'TxtSearch', 'SearchHint', 'CmbState', 'BtnView', 'BtnStart', 'BtnStop', 'BtnRestart', 'BtnUpdate', 'BtnConfigure', 'BtnLogs', 'BtnOpen',
     'TxtGroupName', 'TxtGroupInfo', 'BtnApply', 'BtnGroupStart', 'BtnGroupStop', 'BtnGroupUpdate', 'BtnRemoveOrphans', 'BtnCheckUpdates', 'BtnRefresh',
@@ -2262,15 +2276,23 @@ function Update-RecentList {
     $script:UpdatingRecent = $true
     try {
         $ui.CmbRecent.Items.Clear()
+        # On another machine the list shows that machine's own compose file. The
+        # file picked here is the one on this PC that Send to machine copies across.
+        $m = Get-Machine
+        $prefix = if ($m) { 'Send from: ' } else { '' }
+        $ui.TxtRecentCaption.Text = if ($m) { "Master copy here, sent to $($m.Name)" } else { 'Compose file' }
+        $ui.CmbRecent.ToolTip = if ($m) {
+            "$($m.Name) uses its own copy: $(Get-RemoteComposePath $m)`nThe file picked here is on this PC and is remembered for $($m.Name). Send to machine copies it there, and Configure edits it."
+        } else { "Switch to another compose file you've used on this PC" }
         foreach ($f in @($script:Settings.RecentFiles)) {
             $item = New-Object Windows.Controls.ComboBoxItem
-            $item.Content = '{0}  ({1})' -f (Split-Path -Leaf (Split-Path -Parent $f)), $f
+            $item.Content = '{0}{1}  ({2})' -f $prefix, (Split-Path -Leaf (Split-Path -Parent $f)), $f
             $item.Tag = $f
             $item.ToolTip = $f
             [void]$ui.CmbRecent.Items.Add($item)
             if ($f -eq $script:ComposePath) { $ui.CmbRecent.SelectedItem = $item }
         }
-        $ui.CmbRecent.Visibility = if ($ui.CmbRecent.Items.Count) { 'Visible' } else { 'Collapsed' }
+        $ui.PnlRecent.Visibility = if ($ui.CmbRecent.Items.Count) { 'Visible' } else { 'Collapsed' }
     } finally {
         $script:UpdatingRecent = $false
     }
@@ -2291,7 +2313,9 @@ function Set-ComposeFile([string]$Path) {
     $script:JobQueue.Clear()
     $script:ComposePath = $full
     $script:ComposeDir = Split-Path -Parent $full
-    $script:Settings.ComposeFile = $full
+    # Each machine remembers its own compose file on this PC; Settings.ComposeFile is This PC's.
+    $m = Get-Machine
+    if ($m) { $m.ComposeFile = $full } else { $script:Settings.ComposeFile = $full }
     $script:Settings.RecentFiles = @(@($full) + @($script:Settings.RecentFiles | Where-Object { $_ -and $_ -ne $full }) | Select-Object -First 8)
     Save-Settings
     Update-RecentList
@@ -2303,6 +2327,8 @@ function Set-ComposeFile([string]$Path) {
     $script:RowIndex = @{}
     $script:FileStamp = Get-FileStamp
     $ui.TxtSubtitle.Text = Get-ComposeDisplay
+    $ui.TxtSubtitle.ToolTip = $ui.TxtSubtitle.Text
+    $ui.TxtProject.Text = ''
     Write-Activity "Compose file: $full"
     Request-ConfigLoad
 }
@@ -2513,7 +2539,10 @@ function Import-ComposeConfig($Config, [hashtable]$Hashes) {
     $msg = "Read $count services from the compose file (project '$script:ProjectName')."
     if (-not $first -and $added) { $msg += " $added new." }
     Write-Activity $msg
-    $ui.TxtSubtitle.Text = (Get-ComposeDisplay) + "   ·   project $script:ProjectName   ·   $count services"
+    # Path on one line and project on the next, so neither is cut off.
+    $ui.TxtSubtitle.Text = Get-ComposeDisplay
+    $ui.TxtSubtitle.ToolTip = $ui.TxtSubtitle.Text
+    $ui.TxtProject.Text = "Project $script:ProjectName   ·   $count services"
     Update-Banner
     Update-Groups
     Update-View -Refilter
@@ -3718,10 +3747,11 @@ $checkXaml = @'
         <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="2">
             <Grid>
                 <DataGrid x:Name="GridFindings" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column"
-                          GridLinesVisibility="None" BorderThickness="0" Background="Transparent" RowBackground="Transparent"
+                          GridLinesVisibility="None" BorderThickness="0" Background="Transparent"
                           SelectionMode="Extended" SelectionUnit="FullRow" CanUserAddRows="False" RowHeight="28">
                     <DataGrid.RowStyle>
                         <Style TargetType="DataGridRow">
+                            <Setter Property="Background" Value="Transparent"/>
                             <Setter Property="BorderThickness" Value="4,0,0,0"/>
                             <Setter Property="BorderBrush" Value="Transparent"/>
                             <Style.Triggers>
@@ -4096,10 +4126,11 @@ $diskXaml = @'
         <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="2">
             <Grid>
                 <DataGrid x:Name="GridImages" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column"
-                          GridLinesVisibility="None" BorderThickness="0" Background="Transparent" RowBackground="Transparent"
+                          GridLinesVisibility="None" BorderThickness="0" Background="Transparent"
                           SelectionMode="Extended" SelectionUnit="FullRow" CanUserAddRows="False" RowHeight="28">
                     <DataGrid.RowStyle>
                         <Style TargetType="DataGridRow">
+                            <Setter Property="Background" Value="Transparent"/>
                             <Setter Property="BorderThickness" Value="4,0,0,0"/>
                             <Setter Property="BorderBrush" Value="Transparent"/>
                             <Style.Triggers>
@@ -4369,10 +4400,11 @@ $configureXaml = @'
         <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="2">
             <Grid>
                 <DataGrid x:Name="GridEnv" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column"
-                          GridLinesVisibility="None" BorderThickness="0" Background="Transparent" RowBackground="Transparent"
+                          GridLinesVisibility="None" BorderThickness="0" Background="Transparent"
                           SelectionMode="Single" SelectionUnit="FullRow" CanUserAddRows="False" RowHeight="28">
                     <DataGrid.RowStyle>
                         <Style TargetType="DataGridRow">
+                            <Setter Property="Background" Value="Transparent"/>
                             <Setter Property="BorderThickness" Value="4,0,0,0"/>
                             <Setter Property="BorderBrush" Value="Transparent"/>
                             <Style.Triggers>
@@ -4976,7 +5008,7 @@ function Update-LogWindows {
 $settingsXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Settings" Width="580" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        Title="Settings" Width="640" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
         FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
     <Window.Resources><!--SHARED--></Window.Resources>
     <StackPanel Margin="18">
@@ -5019,7 +5051,7 @@ $settingsXaml = @'
                 <CheckBox x:Name="ChkConfirm" Grid.Row="5" Grid.ColumnSpan="2" Margin="0,0,0,8" Content="Ask before stopping a group"/>
                 <CheckBox x:Name="ChkTray" Grid.Row="6" Grid.ColumnSpan="2" Margin="0,0,0,8" Content="Minimise to the notification area (tray)"/>
                 <CheckBox x:Name="ChkIcons" Grid.Row="7" Grid.ColumnSpan="2" Margin="0,0,0,8"
-                          Content="Show app icons (downloaded once from the dashboard-icons project and kept on this PC)"/>
+                          Content="Show app icons (downloaded once and kept on this PC)"/>
                 <CheckBox x:Name="ChkUpdates" Grid.Row="8" Grid.ColumnSpan="2" Margin="0,0,0,8"
                           Content="Check for newer images when the app starts (at most every 12 hours)"/>
                 <CheckBox x:Name="ChkProgress" Grid.Row="9" Grid.ColumnSpan="2"
@@ -5110,6 +5142,18 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.04' = @(
+        'Settings: the Show app icons option and the editor path are no longer cut off.',
+        'Each machine remembers its own compose file, so picking a machine also picks the file you use with it.',
+        'With another machine picked, the compose file box reads "Send from:", because that machine runs its own copy of the file.',
+        'Captions above the machine and compose file lists say what each one is for.',
+        'The selected container''s row is highlighted more strongly, as well as the line at its start.',
+        'The project name and service count have their own line under the compose file path, so they are no longer cut off.',
+        'Row highlights now show in every list (they were hidden by a list setting).',
+        'The Send button sits right next to the compose file it sends.',
+        'The Note column is wider, so notes such as "Changed: recreate to apply" show in full.',
+        'The Image column has more room, and hovering over an image shows its full name.'
+    )
     '1.03' = @(
         'A progress window shows what Docker is doing while containers start, stop or update (can be turned off in Settings).',
         'Machines: manage Docker on other machines (a Linux laptop, a VM, a Synology NAS) over SSH from the list at the top.',
@@ -5590,10 +5634,21 @@ $ui.HeaderTitle.Add_SizeChanged({
 
 $window.Add_ContentRendered({
         Update-HeaderFit
-        for ($i = 0; $i -lt $ui.Grid.Columns.Count; $i++) {
-            $ui.Grid.Columns[$i].Width = New-Object Windows.Controls.DataGridLength(0)
-            $ui.Grid.Columns[$i].Width = $script:ColumnWidths[$i]
-        }
+    })
+
+# Set the column widths again once the first rows are on screen. Before that the DataGrid
+# leaves every column at its MinWidth and the * column (Image) never takes the spare width.
+$script:ColumnsSet = $false
+$ui.Grid.ItemContainerGenerator.Add_StatusChanged({
+        if ($script:ColumnsSet -or $ui.Grid.Items.Count -eq 0) { return }
+        if ($ui.Grid.ItemContainerGenerator.Status -ne [Windows.Controls.Primitives.GeneratorStatus]::ContainersGenerated) { return }
+        $script:ColumnsSet = $true
+        [void]$window.Dispatcher.BeginInvoke([Action] {
+                for ($i = 0; $i -lt $ui.Grid.Columns.Count; $i++) {
+                    $w = $script:ColumnWidths[$i]
+                    $ui.Grid.Columns[$i].Width = New-Object Windows.Controls.DataGridLength($w.Value, $w.UnitType)
+                }
+            }, [Windows.Threading.DispatcherPriority]::ContextIdle)
     })
 
 $window.Add_Closed({
@@ -5680,6 +5735,19 @@ function Set-Machine([string]$Name) {
         return
     }
     $script:Settings.Machine = $Name
+    # Switch to the compose file this machine was last used with.
+    $pick = Get-Machine
+    $want = if ($pick) { [string]$pick.ComposeFile } else { [string]$script:Settings.ComposeFile }
+    if ($want -and $want -ne $script:ComposePath -and (Test-Path -LiteralPath $want)) {
+        foreach ($job in @($script:JobQueue.ToArray())) { Write-Activity "Cancelled (compose file changed): $($job.Label)" }
+        $script:JobQueue.Clear()
+        $script:ComposePath = $want
+        $script:ComposeDir = Split-Path -Parent $want
+        $script:Settings.RecentFiles = @(@($want) + @($script:Settings.RecentFiles | Where-Object { $_ -and $_ -ne $want }) | Select-Object -First 8)
+        Write-Activity "Compose file: $want"
+    } elseif ($pick -and -not $pick.ComposeFile -and $script:ComposePath) {
+        $pick.ComposeFile = $script:ComposePath
+    }
     Save-Settings
     Update-MachineList
     $script:ConfigGen++
@@ -5696,7 +5764,8 @@ function Set-Machine([string]$Name) {
     $script:NextPoll = [DateTime]::MinValue
     $m = Get-Machine
     Write-Activity $(if ($m) { "Machine: $($m.Name) ($($m.Login), folder $($m.Folder))" } else { 'Machine: This PC' })
-    if ($script:ComposePath) { $ui.TxtSubtitle.Text = Get-ComposeDisplay }
+    if ($script:ComposePath) { $ui.TxtSubtitle.Text = Get-ComposeDisplay; $ui.TxtSubtitle.ToolTip = $ui.TxtSubtitle.Text; $ui.TxtProject.Text = '' }
+    Update-RecentList
     Update-Banner
     Update-Groups
     Update-View -Refilter
@@ -5840,7 +5909,9 @@ function Get-MachineFormValues {
 function Save-MachineForm {
     $f = $script:MachinesForm
     if ($f.Loading -or $f.Current -lt 0 -or $f.Current -ge $f.List.Count) { return }
+    $keep = $f.List[$f.Current].ComposeFile
     $f.List[$f.Current] = Get-MachineFormValues
+    $f.List[$f.Current].ComposeFile = [string]$keep
     $label = if ($f.List[$f.Current].Name) { $f.List[$f.Current].Name } else { '(new machine)' }
     if ([string]$f.LstMachines.Items[$f.Current] -ne $label) {
         $sel = $f.LstMachines.SelectedIndex
@@ -6029,7 +6100,7 @@ if ($script:DockerExe) { Write-Activity "Using $script:DockerExe" } else { Write
 Set-ViewMode $script:Settings.ViewMode
 Read-UpdateCache
 
-$startFile = if ($ComposeFile) { $ComposeFile } else { [string]$script:Settings.ComposeFile }
+$startFile = if ($ComposeFile) { $ComposeFile } elseif ((Get-Machine) -and (Get-Machine).ComposeFile) { [string](Get-Machine).ComposeFile } else { [string]$script:Settings.ComposeFile }
 Update-MachineList
 if (Get-Machine) { Write-Activity "Machine: $(Get-MachineName) ($((Get-Machine).Login))" }
 Update-RecentList
