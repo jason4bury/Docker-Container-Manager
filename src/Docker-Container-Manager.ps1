@@ -29,10 +29,10 @@
     Opens the window with the last compose file used.
 
 .EXAMPLE
-    "Docker Container Manager v1.06.exe" -ComposeFile "D:\Docker\docker-compose.yml"
+    "Docker Container Manager v1.07.exe" -ComposeFile "D:\Docker\docker-compose.yml"
 
 .NOTES
-    Version:   1.06 (keep in step with CHANGELOG.md)
+    Version:   1.07 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -44,7 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.06'
+$script:AppVersion = '1.07'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 
 #region BUNDLE-ASSETS
@@ -5306,6 +5306,9 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.07' = @(
+        'Export: the Light / dark switch is bigger and sits in the blue header at the top of the page, so it''s easy to find.'
+    )
     '1.06' = @(
         'Source page: right-click a container (or press Source) to open its project page on GitHub, GitLab or Docker Hub. Your own list of links (Edit source links) is kept on this PC.',
         'Export: saves the list as one web page (HTML) to keep, print or send, with icons, states, web pages and source pages. It uses the app''s light or dark theme, with a switch at the top of the page.',
@@ -6133,9 +6136,10 @@ html.dark .page, html.light .flip:checked ~ .page, html.auto .flip:checked ~ .pa
 body { margin: 0; font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
 .page { min-height: 100vh; padding: 24px; background: var(--page); color: var(--ink); }
 .flip { position: absolute; opacity: 0; pointer-events: none; }
-.flipper { position: fixed; top: 10px; right: 14px; z-index: 5; background: var(--card); color: var(--ink); border: 1px solid var(--edge); border-radius: 14px; padding: 3px 12px; font-size: 12px; cursor: pointer; user-select: none; }
+.flipper { position: absolute; top: 14px; right: 16px; background: rgba(255,255,255,.16); color: #fff; border: 1px solid rgba(255,255,255,.55); border-radius: 16px; padding: 5px 14px; font-size: 13px; font-weight: 600; cursor: pointer; user-select: none; }
+.flipper:hover { background: rgba(255,255,255,.28); }
 .flip:focus-visible ~ .page .flipper { outline: 2px solid var(--accent); }
-header { background: linear-gradient(90deg, #12325a, #1e5fa8); color: #fff; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; }
+header { position: relative; background: linear-gradient(90deg, #12325a, #1e5fa8); color: #fff; border-radius: 10px; padding: 18px 170px 18px 22px; margin-bottom: 16px; }
 header h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
 header p { margin: 0; color: #cfe0f5; overflow-wrap: anywhere; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
@@ -6174,12 +6178,11 @@ footer { color: var(--soft); font-size: 12px; margin-top: 18px; }
 <body>
 <input type="checkbox" id="flip" class="flip" aria-label="Switch between light and dark">
 <div class="page">
-<label for="flip" class="flipper" title="Switch between light and dark">&#9680; Light / dark</label>
 '@
     $machine = Get-MachineName
     $where = if ($script:ComposePath) { Get-ComposeDisplay } else { '' }
     $project = if ($script:ProjectName) { "project $script:ProjectName &middot; " } else { '' }
-    & $add ("<header><h1>{0}</h1><p>{1}</p><p>Containers on {2} &middot; {3}{4} containers{5} &middot; exported {6} by {7} v{8}</p></header>`n" -f (ConvertTo-HtmlText $title), (ConvertTo-HtmlText $where), (ConvertTo-HtmlText $machine), $project, $rows.Count, $(if ($Scope) { ' (' + (ConvertTo-HtmlText $Scope) + ')' } else { '' }), (ConvertTo-HtmlText ((Get-Date).ToString('d MMMM yyyy HH:mm'))), (ConvertTo-HtmlText $script:AppName), $script:AppVersion)
+    & $add ("<header><label for=""flip"" class=""flipper"" title=""Switch between light and dark"">&#9680; Light / dark</label><h1>{0}</h1><p>{1}</p><p>Containers on {2} &middot; {3}{4} containers{5} &middot; exported {6} by {7} v{8}</p></header>`n" -f (ConvertTo-HtmlText $title), (ConvertTo-HtmlText $where), (ConvertTo-HtmlText $machine), $project, $rows.Count, $(if ($Scope) { ' (' + (ConvertTo-HtmlText $Scope) + ')' } else { '' }), (ConvertTo-HtmlText ((Get-Date).ToString('d MMMM yyyy HH:mm'))), (ConvertTo-HtmlText $script:AppName), $script:AppVersion)
     & $add '<div class="chips">'
     foreach ($c in @(@('Running', $running), @('Stopped', ($rows.Count - $running)), @('Need a look', $problems), @('Changed', $changed), @('Newer image', $updates))) {
         & $add ('<div class="chip"><b>{0}</b>{1}</div>' -f $c[1], (ConvertTo-HtmlText $c[0]))

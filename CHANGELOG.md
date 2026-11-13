@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.07] - 2026-11-13
+
+### Fixed
+- Export: the **Light / dark** switch was small and hard to see above the header. It's now bigger and sits in the
+  blue header at the top right of the page.
+
 ## [1.06] - 2026-11-13
 
 ### Added
