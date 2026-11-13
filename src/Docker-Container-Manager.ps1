@@ -29,10 +29,10 @@
     Opens the window with the last compose file used.
 
 .EXAMPLE
-    "Docker Container Manager v1.04.exe" -ComposeFile "D:\Docker\docker-compose.yml"
+    "Docker Container Manager v1.05.exe" -ComposeFile "D:\Docker\docker-compose.yml"
 
 .NOTES
-    Version:   1.04 (keep in step with CHANGELOG.md)
+    Version:   1.05 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -44,7 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.04'
+$script:AppVersion = '1.05'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 
 #region BUNDLE-ASSETS
@@ -348,6 +348,8 @@ function Get-DefaultSettings {
         Machines          = @()
         Machine           = ''
         ShowProgress      = $true
+        PortainerFolder   = ''
+        ShowFinished      = $true
     }
 }
 
@@ -365,6 +367,7 @@ function ConvertTo-Machine($Item) {
         Docker  = & $get 'Docker'
         WebHost = & $get 'WebHost'
         ComposeFile = & $get 'ComposeFile'
+        Portainer = (& $get 'Portainer').TrimEnd('/')
     }
     if (-not $m.Name -or -not $m.Login) { return $null }
     if (-not $m.Docker) { $m.Docker = 'docker' }
@@ -451,6 +454,8 @@ $script:ServiceConfigs = @{}
 $script:Closing        = $false
 $script:UngroupedName  = 'Ungrouped'
 $script:OrphanName     = 'Not in compose file'
+$script:FinishedJobs   = New-Object System.Collections.ArrayList
+$script:FinishedForm   = $null
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -1213,6 +1218,8 @@ $mainXaml = @'
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="6,0,0,0">
                         <ComboBox x:Name="CmbState" Width="150" VerticalContentAlignment="Center" ToolTip="Show only containers in this state"/>
                         <Button x:Name="BtnView" Style="{DynamicResource Btn}" Margin="6,0,0,0" ToolTip="Switch between the list and cards (Ctrl+T)"/>
+                        <Button x:Name="BtnPortainer" Content="Portainer" Tag="&#xE8A7;" Style="{DynamicResource Btn}" Margin="6,0,0,0"
+                                ToolTip="Open Portainer on this machine. Starts it if it's stopped, or offers to install it. Right-click to update it or change its data folder."/>
                     </StackPanel>
                     <WrapPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
                         <Button x:Name="BtnStart" Content="Start" Tag="&#xE768;" Style="{DynamicResource Btn}" ToolTip="Start the selected containers (creates them if needed)"/>
@@ -1240,6 +1247,8 @@ $mainXaml = @'
                             <TextBlock x:Name="TxtGroupInfo" Foreground="{DynamicResource SoftInk}" Margin="0,1,0,0" TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                         <WrapPanel Grid.Column="1" VerticalAlignment="Center">
+                            <Button x:Name="BtnAutoGroup" Content="Group automatically..." Tag="&#xE8FD;" Style="{DynamicResource Btn}" Visibility="Collapsed"
+                                    ToolTip="Suggest a group for each container that has none, from its image name. You see the list and can change it before anything is saved."/>
                             <Button x:Name="BtnApply" Tag="&#xE73E;" Style="{DynamicResource PrimaryBtn}" Visibility="Collapsed"
                                     ToolTip="Recreate the containers whose settings changed in the compose file. Stopped ones stay stopped."/>
                             <Button x:Name="BtnGroupStart" Content="Start group" Tag="&#xE768;" Style="{DynamicResource Btn}"/>
@@ -1587,8 +1596,8 @@ $window = New-XamlObject $mainXaml
 $ui = @{}
 foreach ($name in 'ImgLogo', 'HeaderTitle', 'HeaderButtons', 'TxtSubtitle', 'TxtProject', 'CmbMachine', 'BtnSend', 'CmbRecent', 'PnlRecent', 'TxtRecentCaption', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnDisk', 'BtnFolder', 'BtnSettings', 'BtnAbout',
     'Banner', 'BannerGlyph', 'BannerText', 'CmbEnvTemplate', 'BannerAction', 'BannerRetry',
-    'LstGroups', 'TxtSearch', 'SearchHint', 'CmbState', 'BtnView', 'BtnStart', 'BtnStop', 'BtnRestart', 'BtnUpdate', 'BtnConfigure', 'BtnLogs', 'BtnOpen',
-    'TxtGroupName', 'TxtGroupInfo', 'BtnApply', 'BtnGroupStart', 'BtnGroupStop', 'BtnGroupUpdate', 'BtnRemoveOrphans', 'BtnCheckUpdates', 'BtnRefresh',
+    'LstGroups', 'TxtSearch', 'SearchHint', 'CmbState', 'BtnView', 'BtnPortainer', 'BtnStart', 'BtnStop', 'BtnRestart', 'BtnUpdate', 'BtnConfigure', 'BtnLogs', 'BtnOpen',
+    'TxtGroupName', 'TxtGroupInfo', 'BtnAutoGroup', 'BtnApply', 'BtnGroupStart', 'BtnGroupStop', 'BtnGroupUpdate', 'BtnRemoveOrphans', 'BtnCheckUpdates', 'BtnRefresh',
     'Grid', 'Cards', 'TxtEmpty', 'RowMenu', 'MnuStart', 'MnuStop', 'MnuRestart', 'MnuUpdate', 'MnuRecreate', 'MnuConfigure', 'MnuLogs', 'MnuOpen', 'MnuCopy', 'MnuRemove',
     'LogRow', 'LogSplitter', 'LogPane', 'BtnLogCopy', 'BtnLogClear', 'TxtLog', 'TxtStatus', 'PrgBusy', 'TxtBusy', 'BtnCancel', 'ChkActivity') {
     $ui[$name] = $window.FindName($name)
@@ -2429,6 +2438,8 @@ function Get-ServiceLabels($Service) {
     $labels = @{}
     $raw = Get-PropValue $Service 'labels'
     if ($null -eq $raw) { return $labels }
+    # A list with one label comes back as a plain string.
+    if ($raw -is [string]) { $raw = @($raw) }
     if ($raw -is [array]) {
         foreach ($l in $raw) { $kv = ([string]$l).Split('=', 2); $labels[$kv[0]] = if ($kv.Count -gt 1) { $kv[1] } else { '' } }
     } else {
@@ -2819,6 +2830,9 @@ function Update-GroupBar {
     foreach ($b in $ui.BtnGroupStart, $ui.BtnGroupUpdate) { $b.Visibility = if ($isOrphans) { 'Collapsed' } else { 'Visible' }; $b.IsEnabled = ($rows.Count -gt 0) }
     $ui.BtnGroupStop.IsEnabled = ($running -gt 0)
     $ui.BtnRemoveOrphans.Visibility = if ($isOrphans) { 'Visible' } else { 'Collapsed' }
+    $ungrouped = @($script:Rows | Where-Object { $_.InCompose -and $_.Group -eq $script:UngroupedName }).Count
+    $ui.BtnAutoGroup.Content = "Group automatically ($ungrouped)..."
+    $ui.BtnAutoGroup.Visibility = if ($ungrouped -and -not $isOrphans) { 'Visible' } else { 'Collapsed' }
     $allChanged = @($script:Rows | Where-Object Changed).Count
     if ($allChanged) {
         $ui.BtnApply.Content = "Apply changes ($allChanged)"
@@ -2923,14 +2937,14 @@ function Update-SelectionButtons {
 # Actions. Each job is a list of docker commands run one after another; jobs
 # queue up and run one at a time, with their output in the activity log.
 # ---------------------------------------------------------------------------
-function Add-Job([string]$Label, [object[]]$Steps, [switch]$Reload) {
+function Add-Job([string]$Label, [object[]]$Steps, [switch]$Reload, [scriptblock]$OnSuccess) {
     $steps = @($Steps | Where-Object { $_ })
     if (-not $steps.Count) { return }
     if (-not (Test-DockerReady)) {
         $what = if (Get-Machine) { "ssh.exe wasn't found" } else { "docker.exe wasn't found" }
         [void][Windows.MessageBox]::Show($window, "$what, so nothing can be started.", $script:AppName, 'OK', 'Warning'); return
     }
-    $script:JobQueue.Enqueue(@{ Label = $Label; Steps = $steps; Index = 0; Runner = $null; Failed = $false; Reload = [bool]$Reload })
+    $script:JobQueue.Enqueue(@{ Label = $Label; Steps = $steps; Index = 0; Runner = $null; Failed = $false; Reload = [bool]$Reload; OnSuccess = $OnSuccess })
     $script:Timer.Interval = [TimeSpan]::FromMilliseconds(200)
     Update-BusyState
     Update-Jobs
@@ -2950,7 +2964,7 @@ function Update-Jobs {
         $r = $job.Runner
         $line = $null
         $n = 0
-        while ($n -lt 400 -and $r.Lines.TryDequeue([ref]$line)) { Write-Activity ('    ' + $line) -Plain; Add-ProgressLine $line; $n++ }
+        while ($n -lt 400 -and $r.Lines.TryDequeue([ref]$line)) { Write-Activity ('    ' + $line) -Plain; Add-ProgressLine $line; if ($line.Trim() -and $null -ne $job.StepLines -and $job.StepLines.Count -lt 200) { [void]$job.StepLines.Add($line.Trim()) }; $n++ }
         if (-not $r.IsDone -or -not $r.Lines.IsEmpty) { return }
         $step = $job.Steps[$job.Index]
         if ($r.ExitCode -ne 0 -and -not $step.AllowFail) {
@@ -2976,6 +2990,7 @@ function Update-Jobs {
 
 function Start-JobStep($Job) {
     $step = $Job.Steps[$Job.Index]
+    $Job.StepLines = New-Object System.Collections.ArrayList
     try {
         if ($step.Exe -eq 'ssh') {
             $ssh = Find-Ssh
@@ -2990,6 +3005,7 @@ function Start-JobStep($Job) {
     } catch {
         $Job.Failed = $true
         Write-Activity "Couldn't start docker: $($_.Exception.Message)"
+        $Job.StartError = "Couldn't start docker: $($_.Exception.Message)"
         Complete-Job $Job
     }
 }
@@ -3005,9 +3021,18 @@ function Complete-Job($Job) {
     Update-BusyState
     $script:NextPoll = [DateTime]::MinValue
     if ($Job.Reload) { Request-ConfigLoad }
+    if (-not $Job.Failed -and $Job.OnSuccess) {
+        try { & $Job.OnSuccess } catch { Write-Activity "Internal error: $($_.Exception.Message)" }
+    }
     if (-not $script:JobQueue.Count) {
         Start-LocalDigestScan
         if ($script:DiskForm) { Update-DiskWindow }
+    }
+    [void]$script:FinishedJobs.Add(@{ Label = $Job.Label; Failed = [bool]$Job.Failed; Cancelled = [bool]$Job.Cancelled; Error = (Get-JobErrorLine $Job) })
+    if (-not $script:JobQueue.Count) {
+        $done = @($script:FinishedJobs)
+        $script:FinishedJobs.Clear()
+        Show-Finished $done
     }
     if (-not $window.IsVisible -and $script:Tray) {
         $icon = if ($Job.Failed) { [Windows.Forms.ToolTipIcon]::Error } else { [Windows.Forms.ToolTipIcon]::Info }
@@ -3023,6 +3048,7 @@ function Stop-CurrentJob {
     $job.Index = $job.Steps.Count
     Write-Activity "Cancelled: $($job.Label)"
     $job.Failed = $true
+    $job.Cancelled = $true
     Complete-Job $job
     foreach ($q in @($script:JobQueue.ToArray())) { Write-Activity "Cancelled: $($q.Label)" }
     $script:JobQueue.Clear()
@@ -3162,6 +3188,128 @@ function Complete-JobProgress($Job) {
     $p.PrgOutput.ScrollToEnd()
 }
 
+# ---------------------------------------------------------------------------
+# Finished box: when Docker has finished what it was asked to do and the
+# progress window isn't showing (Hide was pressed, or it's turned off), a small
+# box in the bottom-right corner of the screen says how it went. It stays on
+# top without taking the focus. Success closes itself after 10 seconds; a
+# failure stays until it's closed. Jobs finishing close together share one box.
+# ---------------------------------------------------------------------------
+$finishedXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Finished" Width="440" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="Manual" ShowInTaskbar="False"
+        Topmost="True" ShowActivated="False" WindowStyle="ToolWindow"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <StackPanel Margin="16">
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock x:Name="FinGlyph" FontFamily="Segoe MDL2 Assets" FontSize="20" VerticalAlignment="Center" Margin="0,0,10,0"/>
+            <TextBlock x:Name="FinTitle" Grid.Column="1" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
+        </Grid>
+        <TextBlock x:Name="FinList" TextWrapping="Wrap" Margin="0,8,0,0" LineHeight="20"/>
+        <TextBlock x:Name="FinError" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="12"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button x:Name="FinLog" Content="Show log" Tag="&#xE9F9;" Style="{StaticResource Btn}"/>
+            <Button x:Name="FinClose" Content="Close" Style="{StaticResource PrimaryBtn}" IsCancel="True" Margin="0"/>
+        </StackPanel>
+    </StackPanel>
+</Window>
+'@
+
+# Bottom-right corner of the screen the main window is on (in WPF units).
+function Set-FinishedPosition {
+    $f = $script:FinishedForm
+    if (-not $f) { return }
+    $w = $f.Window
+    try {
+        $hwnd = (New-Object Windows.Interop.WindowInteropHelper($window)).Handle
+        $area = [Windows.Forms.Screen]::FromHandle($hwnd).WorkingArea
+        $src = [Windows.PresentationSource]::FromVisual($window)
+        $m = if ($src) { $src.CompositionTarget.TransformFromDevice } else { [Windows.Media.Matrix]::Identity }
+        $br = $m.Transform((New-Object Windows.Point($area.Right, $area.Bottom)))
+    } catch {
+        $wa = [Windows.SystemParameters]::WorkArea
+        $br = New-Object Windows.Point($wa.Right, $wa.Bottom)
+    }
+    $w.Left = $br.X - $w.ActualWidth - 16
+    $w.Top = $br.Y - $w.ActualHeight - 16
+}
+
+# The line most likely to say what went wrong in the step that failed.
+function Get-JobErrorLine($Job) {
+    if ($Job.StartError) { return [string]$Job.StartError }
+    $lines = @($Job.StepLines)
+    $hit = @($lines | Where-Object { $_ -match '(?i)error|denied|not found|unknown|no such|failed|cannot|refused|invalid' } | Select-Object -First 1)
+    if ($hit.Count) { return [string]$hit[0] }
+    if ($lines.Count) { return [string]$lines[-1] }
+    return ''
+}
+
+function Show-Finished([object[]]$Jobs) {
+    if (-not $Jobs.Count -or -not $script:Settings.ShowFinished) { return }
+    if ($script:ProgressForm -and $script:ProgressForm.Window.IsVisible) { return }
+    $f = $script:FinishedForm
+    if (-not $f) {
+        $w = New-XamlObject $finishedXaml
+        if ($window.Icon) { $w.Icon = $window.Icon }
+        $f = @{ Window = $w; Items = (New-Object System.Collections.ArrayList); CloseAt = $null }
+        foreach ($n in 'FinGlyph', 'FinTitle', 'FinList', 'FinError', 'FinLog', 'FinClose') { $f[$n] = $w.FindName($n) }
+        $f.FinClose.Add_Click({ if ($script:FinishedForm) { $script:FinishedForm.Window.Close() } })
+        $f.FinLog.Add_Click({
+                Show-MainWindow
+                Set-ActivityVisible $true
+                $ui.ChkActivity.IsChecked = $true
+                $ui.TxtLog.ScrollToEnd()
+                if ($script:FinishedForm) { $script:FinishedForm.Window.Close() }
+            })
+        $w.Add_SizeChanged({ Set-FinishedPosition })
+        $w.Add_Closed({ $script:FinishedForm = $null })
+        $script:FinishedForm = $f
+    }
+    foreach ($j in $Jobs) { [void]$f.Items.Add($j) }
+    $failed = @($f.Items | Where-Object { $_.Failed -and -not $_.Cancelled })
+    $f.Window.Title = 'Docker Container Manager - ' + (Get-MachineName)
+    if ($failed.Count) {
+        $f.FinTitle.Text = "Didn't work"
+        $f.FinGlyph.Text = [string][char]0xEA39
+        $f.FinGlyph.Foreground = $f.Window.FindResource('Bad')
+        $err = [string]$failed[-1].Error
+        $f.FinError.Text = if ($err) { "Docker said: $err" } else { 'The Activity log shows what Docker said.' }
+        $f.FinError.Visibility = 'Visible'
+        $f.FinLog.Visibility = 'Visible'
+        $f.CloseAt = $null
+        $f.FinClose.Content = 'Close'
+    } else {
+        $allCancelled = (@($f.Items | Where-Object { $_.Cancelled }).Count -eq $f.Items.Count)
+        $f.FinTitle.Text = if ($allCancelled) { 'Cancelled' } else { 'Done' }
+        $f.FinGlyph.Text = if ($allCancelled) { [string][char]0xE711 } else { [string][char]0xE930 }
+        $f.FinGlyph.Foreground = $f.Window.FindResource($(if ($allCancelled) { 'SoftInk' } else { 'Ok' }))
+        $f.FinError.Visibility = 'Collapsed'
+        $f.FinLog.Visibility = 'Collapsed'
+        $f.CloseAt = [DateTime]::Now.AddSeconds(10)
+        $f.FinClose.Content = 'Close (10)'
+    }
+    $lines = foreach ($j in @($f.Items | Select-Object -Last 5)) {
+        $what = if ($j.Cancelled) { 'Cancelled' } elseif ($j.Failed) { 'Failed' } else { 'Done' }
+        '{0}:  {1}' -f $what, $j.Label
+    }
+    if ($f.Items.Count -gt 5) { $lines = @("... and $($f.Items.Count - 5) earlier") + @($lines) }
+    $f.FinList.Text = ($lines -join "`n")
+    if (-not $f.Window.IsVisible) { $f.Window.Show() }
+    Set-FinishedPosition
+}
+
+# Called by the heartbeat: counts down on the Close button after a success.
+function Update-FinishedWindow {
+    $f = $script:FinishedForm
+    if (-not $f -or -not $f.CloseAt) { return }
+    $left = [int][Math]::Ceiling(($f.CloseAt - [DateTime]::Now).TotalSeconds)
+    if ($left -le 0) { $f.Window.Close(); return }
+    $f.FinClose.Content = "Close ($left)"
+}
+
 # Called by the heartbeat: counts down on the Close button and closes the window 10 seconds after a success.
 function Update-ProgressWindow {
     $p = $script:ProgressForm
@@ -3283,7 +3431,7 @@ function Invoke-GroupAction([string]$What) {
         'stop' {
             $todo = @($rows | Where-Object IsRunning)
             if (-not $todo.Count) { return }
-            if (($script:Settings.ConfirmGroupStop -or $key -eq '*') -and -not (Confirm-Action "Stop the $($todo.Count) running container(s) in $name?")) { return }
+            if (($script:Settings.ConfirmGroupStop -or $key -eq '*') -and -not (Confirm-Action "Stop the $($todo.Count) running container(s) in $($name)?")) { return }
             Invoke-Stop $todo "Stop $name"
         }
         'update' {
@@ -5023,7 +5171,7 @@ $settingsXaml = @'
                     <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <TextBlock Text="Label prefix" Margin="0,5,0,10"/>
                 <StackPanel Grid.Column="1" Margin="0,0,0,10">
@@ -5054,8 +5202,10 @@ $settingsXaml = @'
                           Content="Show app icons (downloaded once and kept on this PC)"/>
                 <CheckBox x:Name="ChkUpdates" Grid.Row="8" Grid.ColumnSpan="2" Margin="0,0,0,8"
                           Content="Check for newer images when the app starts (at most every 12 hours)"/>
-                <CheckBox x:Name="ChkProgress" Grid.Row="9" Grid.ColumnSpan="2"
+                <CheckBox x:Name="ChkProgress" Grid.Row="9" Grid.ColumnSpan="2" Margin="0,0,0,8"
                           Content="Show a progress window while Docker is starting, stopping or updating containers"/>
+                <CheckBox x:Name="ChkFinished" Grid.Row="10" Grid.ColumnSpan="2"
+                          Content="Show a box when Docker has finished (when the progress window is hidden)"/>
             </Grid>
         </Border>
         <TextBlock x:Name="TxtWhere" Foreground="{StaticResource SoftInk}" FontSize="12" TextWrapping="Wrap" Margin="2,10,0,0"/>
@@ -5078,7 +5228,7 @@ function Show-Settings {
     $w.Owner = $window
     if ($window.Icon) { $w.Icon = $window.Icon }
     $f = @{ Window = $w; Saved = $false }
-    foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'CmbTheme', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'ChkIcons', 'ChkUpdates', 'ChkProgress', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
+    foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'CmbTheme', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'ChkIcons', 'ChkUpdates', 'ChkProgress', 'ChkFinished', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
     $script:SettingsForm = $f
     $f.TxtPrefix.Text = $script:Settings.LabelPrefix
     $f.TxtRefresh.Text = [string]$script:Settings.RefreshSeconds
@@ -5089,6 +5239,7 @@ function Show-Settings {
     $f.ChkIcons.IsChecked = [bool]$script:Settings.DownloadIcons
     $f.ChkUpdates.IsChecked = [bool]$script:Settings.CheckUpdatesOnStart
     $f.ChkProgress.IsChecked = [bool]$script:Settings.ShowProgress
+    $f.ChkFinished.IsChecked = [bool]$script:Settings.ShowFinished
     foreach ($t in 'System', 'Light', 'Dark') { [void]$f.CmbTheme.Items.Add($t) }
     $f.CmbTheme.SelectedItem = [string]$script:Settings.Theme
     $f.TxtWhere.Text = "Saved in $script:SettingsPath"
@@ -5124,6 +5275,7 @@ function Show-Settings {
             $script:Settings.DownloadIcons = [bool]$f.ChkIcons.IsChecked
             $script:Settings.CheckUpdatesOnStart = [bool]$f.ChkUpdates.IsChecked
             $script:Settings.ShowProgress = [bool]$f.ChkProgress.IsChecked
+            $script:Settings.ShowFinished = [bool]$f.ChkFinished.IsChecked
             $theme = [string]$f.CmbTheme.SelectedItem
             $themeChanged = ($theme -and $theme -ne $script:Settings.Theme)
             if ($theme) { $script:Settings.Theme = $theme }
@@ -5142,6 +5294,13 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.05' = @(
+        'Group automatically: suggests a group for each container without one, from its image name. You check and change the list before anything is saved, and the compose file is backed up first.',
+        'Portainer button: opens Portainer on the chosen machine, starts it when it''s stopped, or installs it (shows the docker run line and asks first). Right-click it to update Portainer or change its data folder.',
+        'Each machine has a Portainer data folder in the Machines window. Portainer Business asks for its licence key in its own page; the app never stores it.',
+        'The Stop group question names the group again.',
+        'When the progress window is hidden (or turned off), a box in the corner of the screen says when Docker has finished, and what went wrong if it failed. It can be turned off in Settings.'
+    )
     '1.04' = @(
         'Settings: the Show app icons option and the editor path are no longer cut off.',
         'Each machine remembers its own compose file, so picking a machine also picks the file you use with it.',
@@ -5270,6 +5429,496 @@ function Show-About {
     }
     [void]$w.ShowDialog()
     $script:AboutDockerText = $null
+}
+
+# ---------------------------------------------------------------------------
+# A one-line question: returns what was typed, or $null for Cancel.
+# ---------------------------------------------------------------------------
+$askXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="620" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <StackPanel Margin="18">
+        <TextBlock x:Name="TxtAskTitle" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,6"/>
+        <TextBlock x:Name="TxtAskText" TextWrapping="Wrap" Foreground="{StaticResource SoftInk}" Margin="0,0,0,10"/>
+        <TextBox x:Name="TxtAskValue" Style="{StaticResource Field}"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button x:Name="BtnAskOk" Content="OK" Style="{StaticResource PrimaryBtn}" IsDefault="True"/>
+            <Button Content="Cancel" Style="{StaticResource Btn}" IsCancel="True" Margin="0"/>
+        </StackPanel>
+    </StackPanel>
+</Window>
+'@
+
+function Read-TextValue($Owner, [string]$Title, [string]$Text, [string]$Value) {
+    $w = New-XamlObject $askXaml
+    $w.Owner = $Owner
+    $w.Title = $Title
+    if ($window.Icon) { $w.Icon = $window.Icon }
+    $w.FindName('TxtAskTitle').Text = $Title
+    $w.FindName('TxtAskText').Text = $Text
+    $box = $w.FindName('TxtAskValue')
+    $box.Text = $Value
+    $w.FindName('BtnAskOk').Add_Click({ param($s) [Windows.Window]::GetWindow($s).DialogResult = $true })
+    $w.Add_ContentRendered({ param($s) $b = $s.FindName('TxtAskValue'); [void]$b.Focus(); $b.SelectAll() })
+    if ($w.ShowDialog()) { return $box.Text.Trim() }
+    return $null
+}
+
+# ---------------------------------------------------------------------------
+# Portainer: one button opens Portainer on the chosen machine, starts it when
+# it's stopped, or installs it (after showing the docker run line). Portainer
+# Business asks for its licence key in its own web page and keeps it in its
+# data folder, so the app never sees or stores it. The data folder is kept for
+# each machine in the settings (Machines window; This PC in PortainerFolder).
+# ---------------------------------------------------------------------------
+$script:PortainerImage = 'portainer/portainer-ee'
+$script:PortainerWhat = ''
+
+function Get-PortainerFolder {
+    $m = Get-Machine
+    if ($m) { return [string]$m.Portainer }
+    return [string]$script:Settings.PortainerFolder
+}
+
+function Set-PortainerFolder([string]$Folder) {
+    $m = Get-Machine
+    if ($m) { $m.Portainer = $Folder } else { $script:Settings.PortainerFolder = $Folder }
+    Save-Settings
+    Write-Activity "Portainer data folder on $(Get-MachineName): $Folder"
+}
+
+# A first guess: docker_configs\portainer next to the compose file on this PC,
+# the docker shared folder on a Synology, the user's home folder elsewhere.
+function Get-PortainerSuggestion {
+    $m = Get-Machine
+    if (-not $m) {
+        $base = if ($script:ComposeDir) { $script:ComposeDir } else { [Environment]::GetFolderPath('MyDocuments') }
+        return ((Join-Path $base 'docker_configs\portainer') -replace '\\', '/')
+    }
+    if ($m.Folder -match '^/(volume\d+)(/|$)') { return "/$($Matches[1])/docker/portainer" }
+    $user = ([string]$m.Login -split '@')[0]
+    if ($user -eq 'root') { return '/root/docker_configs/portainer' }
+    return "/home/$user/docker_configs/portainer"
+}
+
+function Read-PortainerFolder {
+    $where = Get-MachineName
+    $value = Get-PortainerFolder
+    if (-not $value) { $value = Get-PortainerSuggestion }
+    $hint = if (Get-Machine) { "It's the full path on $where, starting with /." } else { 'For example E:/Docker/portainer.' }
+    while ($true) {
+        $v = Read-TextValue $window 'Portainer data folder' ("The folder on $where where Portainer keeps its data (mounted as /data). Its settings, users and licence stay there when Portainer is updated. $hint") $value
+        if ($null -eq $v) { return $null }
+        $v = $v.Trim()
+        if (Get-Machine) { $v = $v.TrimEnd('/') } else { $v = ($v -replace '\\', '/'); if ($v -notmatch '^[A-Za-z]:/$') { $v = $v.TrimEnd('/') } }
+        $bad = ''
+        if (-not $v) { $bad = 'Type a folder.' }
+        elseif ($v -match '[;&|`$<>"'']') { $bad = 'The folder name has a character Docker can''t use here.' }
+        elseif ((Get-Machine) -and $v -notmatch '^/') { $bad = "Use the full path on $where, starting with /." }
+        elseif (-not (Get-Machine) -and $v -notmatch '^[A-Za-z]:/') { $bad = 'Use a full path on this PC, starting with a drive letter, for example E:/Docker/portainer.' }
+        if (-not $bad) { return $v }
+        [void][Windows.MessageBox]::Show($window, $bad, 'Portainer data folder', 'OK', 'Warning')
+        $value = $v
+    }
+}
+
+function Get-PortainerRunArguments([string]$Folder) {
+    return @('run', '-d', '-p', '8000:8000', '-p', '9000:9000', '--name', 'portainer', '--restart=unless-stopped',
+        '-v', '/var/run/docker.sock:/var/run/docker.sock', '-v', ($Folder + ':/data'), $script:PortainerImage)
+}
+
+# localhost becomes the machine's address in Open-Url when another machine is chosen.
+function Open-Portainer { Open-Url 'http://localhost:9000' }
+
+function Invoke-Portainer([string]$What) {
+    if ($What -eq 'open') { Open-Portainer; return }
+    if ($What -eq 'folder') { $f = Read-PortainerFolder; if ($f) { Set-PortainerFolder $f }; return }
+    if (-not (Test-DockerReady)) {
+        [void][Windows.MessageBox]::Show($window, "Docker can't be reached on $(Get-MachineName), so Portainer can't be checked.", $script:AppName, 'OK', 'Warning')
+        return
+    }
+    $script:PortainerWhat = $What
+    Set-Status "Looking for Portainer on $(Get-MachineName)..."
+    Start-DockerCall -Arguments @('ps', '-a', '--filter', 'name=^portainer$', '--format', '{{.State}}') -OnDone { param($res) Complete-PortainerCheck $res }
+}
+
+function Complete-PortainerCheck($Res) {
+    Set-Status ''
+    $where = Get-MachineName
+    if ($Res.ExitCode -ne 0) {
+        [void][Windows.MessageBox]::Show($window, "Docker on $where didn't answer: $(Get-FirstLines $Res.Error 2)", $script:AppName, 'OK', 'Warning')
+        return
+    }
+    $state = @(@(($Res.Output -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }) + @(''))[0]
+    if ($script:PortainerWhat -eq 'update') {
+        if (-not $state) { [void][Windows.MessageBox]::Show($window, "Portainer isn't installed on $where. Press Portainer to install it.", $script:AppName, 'OK', 'Information'); return }
+        # Use the folder the container has now, so an update never starts Portainer with empty data.
+        Start-DockerCall -Arguments @('inspect', 'portainer', '--format', '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}|{{.Name}}|{{.Source}}{{end}}{{end}}') -OnDone { param($res) Complete-PortainerUpdate $res }
+        return
+    }
+    if ($state -eq 'running') { Open-Portainer; return }
+    if ($state) {
+        Add-Job "Start Portainer on $where" @(New-DockerStep @('start', 'portainer')) -OnSuccess { Open-Portainer }
+        return
+    }
+    Install-Portainer
+}
+
+function Install-Portainer {
+    $where = Get-MachineName
+    $folder = Get-PortainerFolder
+    if (-not $folder) {
+        $folder = Read-PortainerFolder
+        if (-not $folder) { return }
+        Set-PortainerFolder $folder
+    }
+    $cmd = 'docker ' + [Dcm.Runner]::Join([string[]](Get-PortainerRunArguments $folder))
+    $q = "Portainer isn't installed on $where. Install it now?`n`nThe app runs:`n$cmd`n`n" +
+    "Portainer keeps its data in $folder (right-click the Portainer button to change it first). It then opens on port 9000, where Portainer Business asks for your licence key the first time. The app doesn't see or keep the key.`n`n" +
+    "Portainer can control Docker on $where (it uses the Docker socket)."
+    if (-not (Confirm-Action $q)) { return }
+    Add-Job "Install Portainer on $where" @(New-DockerStep (Get-PortainerRunArguments $folder)) -OnSuccess { Open-Portainer }
+}
+
+function Complete-PortainerUpdate($Res) {
+    $where = Get-MachineName
+    $mount = ''
+    if ($Res.ExitCode -eq 0) {
+        $parts = ([string]$Res.Output).Trim() -split '\|', 3
+        if ($parts.Count -eq 3) {
+            if ($parts[0] -eq 'volume' -and $parts[1]) { $mount = $parts[1] }
+            elseif ($parts[0] -eq 'bind' -and $parts[2]) {
+                $mount = $parts[2]
+                # Docker Desktop shows a folder on this PC as /run/desktop/mnt/host/e/...
+                if ($mount -match '^/run/desktop/mnt/host/([a-zA-Z])(/.*)?$') { $mount = $Matches[1].ToUpperInvariant() + ':' + $(if ($Matches[2]) { $Matches[2] } else { '/' }) }
+            }
+        }
+    }
+    $folder = if ($mount) { $mount } else { Get-PortainerFolder }
+    if (-not $folder) {
+        $folder = Read-PortainerFolder
+        if (-not $folder) { return }
+    }
+    $from = if ($mount) { 'the same data it uses now' } else { 'this data folder' }
+    $q = "Update Portainer on $($where)?`n`nThe newest $script:PortainerImage image is downloaded, then the portainer container is removed and made again with $from ($folder), so its settings, users and licence are kept.`n`nThe app runs:`n" +
+    "docker pull $script:PortainerImage`ndocker rm -f portainer`ndocker " + [Dcm.Runner]::Join([string[]](Get-PortainerRunArguments $folder))
+    if (-not (Confirm-Action $q)) { return }
+    # Remember a folder (not a named Docker volume) for next time.
+    if ($folder -match '[:/]' -and (Get-PortainerFolder) -ne $folder) { Set-PortainerFolder $folder }
+    $steps = @(
+        New-DockerStep @('pull', $script:PortainerImage)
+        New-DockerStep @('rm', '-f', 'portainer')
+        New-DockerStep (Get-PortainerRunArguments $folder)
+    )
+    Add-Job "Update Portainer on $where" $steps -OnSuccess { Open-Portainer }
+}
+
+# ---------------------------------------------------------------------------
+# Group automatically: suggests a group for each service without a group label,
+# from its image and service name. The list is shown first and can be changed;
+# Save adds one label line to each of those services and changes nothing else,
+# after a backup. Groups already in the file are reused where they fit.
+# ---------------------------------------------------------------------------
+$script:GroupHints = [ordered]@{
+    'Media'      = @('plex', 'jellyfin', 'emby', 'tautulli', 'overseerr', 'jellyseerr', 'ombi', 'petio', 'wizarr', 'kavita', 'komga', 'audiobookshelf', 'navidrome', 'airsonic', 'immich', 'photoprism', 'tdarr', 'handbrake', 'makemkv', 'jellystat', 'streamystats', 'kometa', 'plex-meta-manager', 'tinymediamanager', 'calibre', 'calibre-web', 'jellyplex', 'koel', 'mstream', 'plexautolanguages')
+    'Downloads'  = @('sonarr', 'radarr', 'lidarr', 'readarr', 'prowlarr', 'bazarr', 'mylar3', 'mylar', 'lazylibrarian', 'sabnzbd', 'nzbget', 'qbittorrent', 'transmission', 'deluge', 'rtorrent', 'rutorrent', 'jackett', 'flaresolverr', 'byparr', 'nzbhydra2', 'nzbhydra', 'autobrr', 'unpackerr', 'recyclarr', 'notifiarr', 'cross-seed', 'medusa', 'sickchill', 'sickgear', 'headphones', 'pyload', 'pyload-ng', 'jdownloader', 'jdownloader-2', 'metube', 'yt-dlp', 'youtube-dl', 'tubearchivist', 'pinchflat', 'cleanuparr', 'decluttarr', 'huntarr', 'maintainerr', 'gluetun', 'qbit_manage')
+    'Databases'  = @('postgres', 'postgresql', 'mariadb', 'mysql', 'mongo', 'mongodb', 'redis', 'valkey', 'keydb', 'influxdb', 'couchdb', 'elasticsearch', 'opensearch', 'meilisearch', 'typesense', 'clickhouse', 'timescaledb', 'memcached', 'adminer', 'phpmyadmin', 'pgadmin', 'pgadmin4', 'mongo-express', 'redis-commander', 'redisinsight', 'pgvecto-rs')
+    'Monitoring' = @('uptime-kuma', 'grafana', 'prometheus', 'node-exporter', 'cadvisor', 'netdata', 'glances', 'loki', 'promtail', 'alloy', 'scrutiny', 'dozzle', 'beszel', 'beszel-agent', 'speedtest-tracker', 'healthchecks', 'gotify', 'ntfy', 'apprise', 'diun', 'watchtower', 'changedetection.io', 'changedetection', 'gatus', 'statping', 'smokeping', 'librespeed', 'whatsupdocker', 'wud')
+    'Network'    = @('nginx-proxy-manager', 'traefik', 'caddy', 'swag', 'pihole', 'adguardhome', 'unbound', 'wireguard', 'wg-easy', 'tailscale', 'cloudflared', 'ddclient', 'duckdns', 'authelia', 'authentik', 'crowdsec', 'headscale', 'netbird', 'openvpn', 'zerotier', 'technitium')
+    'Home'       = @('home-assistant', 'homeassistant', 'mosquitto', 'eclipse-mosquitto', 'zigbee2mqtt', 'node-red', 'esphome', 'frigate', 'scrypted', 'homebridge', 'zwave-js-ui', 'go2rtc', 'music-assistant-server')
+    'Dashboards' = @('homepage', 'homarr', 'heimdall', 'organizr', 'dashy', 'flame', 'homer', 'glance', 'dashdot')
+    'Files'      = @('nextcloud', 'syncthing', 'filebrowser', 'seafile', 'owncloud', 'paperless-ngx', 'paperless', 'duplicati', 'kopia', 'restic', 'borgmatic', 'resilio-sync', 'samba', 'sftpgo', 'filestash', 'cloudreve', 'duplicacy')
+    'Tools'      = @('portainer', 'portainer-ce', 'portainer-ee', 'vaultwarden', 'bitwarden', 'it-tools', 'stirling-pdf', 'code-server', 'openspeedtest', 'cyberchef', 'excalidraw', 'drawio', 'freshrss', 'miniflux', 'linkding', 'wallabag', 'mealie', 'tandoor', 'actual-server', 'firefly-iii', 'n8n', 'gitea', 'forgejo', 'jenkins', 'searxng', 'open-webui', 'ollama')
+    'Websites'   = @('nginx', 'httpd', 'apache', 'wordpress', 'ghost', 'php', 'lighttpd')
+}
+
+# ghcr.io/hotio/radarr:release -> radarr
+function Get-ImageShortName([string]$Image) {
+    $ref = ($Image -split '@')[0]
+    $last = ($ref -split '/')[-1]
+    return (($last -split ':')[0]).ToLowerInvariant()
+}
+
+function Get-GroupHint([string]$Image, [string]$Service) {
+    foreach ($word in @((Get-ImageShortName $Image), ([string]$Service).ToLowerInvariant())) {
+        if (-not $word) { continue }
+        foreach ($g in $script:GroupHints.Keys) {
+            foreach ($k in $script:GroupHints[$g]) {
+                if ($word -eq $k -or $word.StartsWith($k + '-') -or $word.StartsWith($k + '_') -or ($k.Length -ge 5 -and $word.StartsWith($k))) { return $g }
+            }
+        }
+    }
+    return ''
+}
+
+# The groups already used, and which of them holds each kind of image (so sonarr
+# goes to "Arr" when radarr is already there, rather than to a new "Downloads").
+function Get-KnownGroups {
+    $grouped = @($script:Rows | Where-Object { $_.InCompose -and $_.Group -ne $script:UngroupedName })
+    $used = @($grouped | ForEach-Object Group | Sort-Object -Unique)
+    $counts = @{}
+    foreach ($r in $grouped) {
+        $h = Get-GroupHint $r.Image $r.Service
+        if ($h) { $k = "$h|$($r.Group)"; $counts[$k] = 1 + [int]$counts[$k] }
+    }
+    $map = @{}
+    foreach ($k in $counts.Keys) {
+        $hint, $group = $k -split '\|', 2
+        if (-not $map.ContainsKey($hint) -or $counts[$k] -gt $counts["$hint|$($map[$hint])"]) { $map[$hint] = $group }
+    }
+    return @{ Used = $used; Map = $map }
+}
+
+# Where a service's labels: are in the compose text, and which names they set.
+function Find-ServiceLabels($Lines, [string]$Service) {
+    $res = @{ Found = $false; Start = -1; End = -1; KeyIndent = -1; LabelsLine = -1; Inline = $false; Form = ''; ItemIndent = -1; Names = @(); Last = -1 }
+    $b = Find-ServiceEnv $Lines $Service
+    if (-not $b.Found -or $b.KeyIndent -lt 0) { return $res }
+    $res.Found = $true; $res.Start = $b.Start; $res.End = $b.End; $res.KeyIndent = $b.KeyIndent
+    $names = New-Object System.Collections.ArrayList
+    $in = $false
+    for ($i = $b.Start + 1; $i -le $b.End; $i++) {
+        $l = $Lines[$i]
+        if (-not (Test-ContentLine $l)) { continue }
+        $ind = Get-LineIndent $l
+        $t = (Remove-YamlComment $l.Trim()).Trim()
+        $item = ($in -and $ind -eq $b.KeyIndent -and $t.StartsWith('-'))
+        if ($ind -le $b.KeyIndent -and -not $item) {
+            $in = $false
+            if ($ind -eq $b.KeyIndent -and $t -match '^labels\s*:\s*(.*)$') {
+                $res.LabelsLine = $i; $res.Last = $i
+                if ($Matches[1].Trim()) { $res.Inline = $true } else { $in = $true }
+            }
+            continue
+        }
+        if (-not $in) { continue }
+        $res.Last = $i
+        if ($res.ItemIndent -lt 0) { $res.ItemIndent = $ind }
+        if ($ind -ne $res.ItemIndent) { continue }
+        if ($t -match '^-\s*(.*)$') {
+            if (-not $res.Form) { $res.Form = 'list' }
+            [void]$names.Add(((Get-Unquoted $Matches[1]) -split '=', 2)[0].Trim())
+        } elseif ($t -match '^("([^"]+)"|''([^'']+)''|([^\s:#]+))\s*:') {
+            if (-not $res.Form) { $res.Form = 'map' }
+            [void]$names.Add((@($Matches[2], $Matches[3], $Matches[4]) | Where-Object { $_ } | Select-Object -First 1))
+        }
+    }
+    $res.Names = @($names)
+    return $res
+}
+
+# Whether the file writes its labels as a list (- home.group=X) or a map (home.group: X).
+function Get-LabelForm($Lines, [string]$Prefix) {
+    $p = [regex]::Escape($Prefix)
+    $list = @($Lines | Where-Object { $_ -match ('^\s*-\s*["'']?' + $p + '\.') }).Count
+    $map = @($Lines | Where-Object { $_ -match ('^\s*["'']?' + $p + '\.[\w.-]+["'']?\s*:') }).Count
+    if ($map -gt $list) { return 'map' }
+    return 'list'
+}
+
+function Format-LabelLine([int]$Indent, [string]$Form, [string]$Name, [string]$Value) {
+    $v = $Value.Replace('$', '$$')
+    # In a map, words such as yes or 2024 would not be read as text.
+    if ($Form -eq 'map' -and $v -match '^(?i)(true|false|yes|no|on|off|null|~|[-+]?[0-9][0-9._]*([eE][-+]?[0-9]+)?)$') { return "{0}{1}: '{2}'" -f (' ' * $Indent), $Name, $v }
+    return Format-ComposeEnvLine $Indent $Form $Name $v
+}
+
+# Adds one label to a service. Returns '' when done, otherwise why it was skipped.
+function Add-ServiceLabel($Lines, [string]$Service, [string]$Label, [string]$Value, [string]$FileForm) {
+    $info = Find-ServiceLabels $Lines $Service
+    if (-not $info.Found) { return "it wasn't found in the file" }
+    if ($info.Inline) { return 'its labels are written on one line' }
+    if ($info.Names -contains $Label) { return "it already has $Label" }
+    $step = $info.KeyIndent - (Get-LineIndent $Lines[$info.Start])
+    if ($step -lt 1) { $step = 2 }
+    $form = if ($info.Form) { $info.Form } elseif ($FileForm) { $FileForm } else { 'list' }
+    if ($info.LabelsLine -ge 0) {
+        $indent = if ($info.ItemIndent -ge 0) { $info.ItemIndent } else { $info.KeyIndent + $step }
+        $Lines.Insert($info.Last + 1, (Format-LabelLine $indent $form $Label $Value))
+    } else {
+        $Lines.Insert($info.End + 1, ((' ' * $info.KeyIndent) + 'labels:'))
+        $Lines.Insert($info.End + 2, (Format-LabelLine ($info.KeyIndent + $step) $form $Label $Value))
+    }
+    return ''
+}
+
+$autoGroupXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Group automatically" Width="860" Height="640" MinWidth="620" MinHeight="380" WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <DockPanel Margin="14">
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <TextBlock Text="Group automatically" FontSize="18" FontWeight="SemiBold"/>
+            <TextBlock x:Name="TxtAgInfo" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+            <TextBlock x:Name="TxtAgUsed" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+        </StackPanel>
+        <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBlock x:Name="TxtAgNote" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button x:Name="BtnAgSave" Content="Save groups" Tag="&#xE74E;" Style="{StaticResource PrimaryBtn}"/>
+                <Button Content="Cancel" Style="{StaticResource Btn}" IsCancel="True" Margin="0"/>
+            </StackPanel>
+        </Grid>
+        <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="12,8">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <Grid x:Name="GridAg">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="210"/><ColumnDefinition Width="*"/><ColumnDefinition Width="230"/></Grid.ColumnDefinitions>
+                </Grid>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
+</Window>
+'@
+
+function Add-AutoGroupCell($Grid, $Element, [int]$Row, [int]$Column) {
+    [Windows.Controls.Grid]::SetRow($Element, $Row)
+    [Windows.Controls.Grid]::SetColumn($Element, $Column)
+    [void]$Grid.Children.Add($Element)
+}
+
+function Show-AutoGroup {
+    if (-not $script:ComposePath -or -not (Test-Path -LiteralPath $script:ComposePath)) { return }
+    $rows = @($script:Rows | Where-Object { $_.InCompose -and $_.Group -eq $script:UngroupedName } | Sort-Object Service)
+    if (-not $rows.Count) { Set-Status 'Every container already has a group.'; return }
+    $prefix = [string]$script:Settings.LabelPrefix
+    $known = Get-KnownGroups
+    $w = New-XamlObject $autoGroupXaml
+    $w.Owner = $window
+    if ($window.Icon) { $w.Icon = $window.Icon }
+    $f = @{ Window = $w; Items = (New-Object System.Collections.ArrayList); Stamp = (Get-FileStamp); Note = $w.FindName('TxtAgNote'); Save = $w.FindName('BtnAgSave') }
+    $grid = $w.FindName('GridAg')
+    $soft = $w.FindResource('SoftInk')
+    $i = 0
+    foreach ($h in 'Container', 'Image', 'Group') {
+        $tb = New-Object Windows.Controls.TextBlock -Property @{ Text = $h; FontWeight = 'SemiBold'; Foreground = $soft; Margin = '0,0,8,6' }
+        if ($i -eq 0) { $grid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition -Property @{ Height = [Windows.GridLength]::Auto })) }
+        Add-AutoGroupCell $grid $tb 0 $i
+        $i++
+    }
+    $n = 1; $suggested = 0
+    foreach ($r in $rows) {
+        $hint = Get-GroupHint $r.Image $r.Service
+        $group = ''
+        if ($hint) {
+            $suggested++
+            if ($known.Map.ContainsKey($hint)) { $group = $known.Map[$hint] }
+            else { $same = @($known.Used | Where-Object { $_ -eq $hint }); $group = if ($same.Count) { $same[0] } else { $hint } }
+        }
+        $grid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition -Property @{ Height = [Windows.GridLength]::Auto }))
+        Add-AutoGroupCell $grid (New-Object Windows.Controls.TextBlock -Property @{ Text = $r.Service; VerticalAlignment = 'Center'; TextTrimming = 'CharacterEllipsis'; Margin = '0,0,8,6' }) $n 0
+        Add-AutoGroupCell $grid (New-Object Windows.Controls.TextBlock -Property @{ Text = $r.Image; ToolTip = $r.Image; Foreground = $soft; VerticalAlignment = 'Center'; TextTrimming = 'CharacterEllipsis'; Margin = '0,0,8,6' }) $n 1
+        $box = New-Object Windows.Controls.TextBox -Property @{ Text = $group; Margin = '0,0,0,6'; ToolTip = 'Type a group, or leave it empty to keep this container ungrouped' }
+        $box.Style = $w.FindResource('Field')
+        Add-AutoGroupCell $grid $box $n 2
+        [void]$f.Items.Add(@{ Service = $r.Service; Box = $box })
+        $n++
+    }
+    $w.FindName('TxtAgInfo').Text = ("{0} container(s) have no {1}.group label. {2} got a group from their image name; the rest are empty. Change any group, type a new one, or clear it to leave that container ungrouped." -f $rows.Count, $prefix, $suggested)
+    $w.FindName('TxtAgUsed').Text = if ($known.Used.Count) { 'Groups already in the file: ' + ($known.Used -join ', ') } else { '' }
+    $note = "Save adds a $prefix.group label to each container with a group, after a backup of the compose file. Nothing else in the file changes. Those containers then show Changed until you press Apply changes."
+    if (Get-Machine) { $note += " They run on $(Get-MachineName), so press Send before Apply changes." }
+    $f.Note.Text = $note
+    $f.Save.Add_Click({ Save-AutoGroups })
+    $script:AutoGroupForm = $f
+    [void]$w.ShowDialog()
+    $script:AutoGroupForm = $null
+    $script:AutoGroupSave = $null
+}
+
+function Save-AutoGroups {
+    $f = $script:AutoGroupForm
+    if (-not $f -or $script:AutoGroupSave) { return }
+    $label = "$([string]$script:Settings.LabelPrefix).group"
+    $want = [ordered]@{}
+    foreach ($x in $f.Items) { $g = $x.Box.Text.Trim(); if ($g) { $want[$x.Service] = $g } }
+    if (-not $want.Count) { [void][Windows.MessageBox]::Show($f.Window, 'Every group is empty, so there is nothing to save.', $script:AppName, 'OK', 'Information'); return }
+    if ((Get-FileStamp) -ne $f.Stamp) {
+        [void][Windows.MessageBox]::Show($f.Window, 'The compose file was changed somewhere else since this window opened, so nothing was saved. Close this window and press Group automatically again.', $script:AppName, 'OK', 'Warning')
+        return
+    }
+    try { $file = Read-TextFile $script:ComposePath }
+    catch { [void][Windows.MessageBox]::Show($f.Window, "Couldn't read the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Error'); return }
+    $form = Get-LabelForm $file.Lines ([string]$script:Settings.LabelPrefix)
+    $done = New-Object System.Collections.ArrayList
+    $skipped = New-Object System.Collections.ArrayList
+    foreach ($svc in $want.Keys) {
+        $why = Add-ServiceLabel $file.Lines $svc $label $want[$svc] $form
+        if ($why) { [void]$skipped.Add("$svc ($why)") } else { [void]$done.Add($svc) }
+    }
+    if (-not $done.Count) {
+        [void][Windows.MessageBox]::Show($f.Window, "Nothing could be added:`n`n" + ($skipped -join "`n"), $script:AppName, 'OK', 'Warning')
+        return
+    }
+    $script:AutoGroupSave = @{ File = $file; Want = $want; Done = $done; Skipped = $skipped; Label = $label; Tmp = '' }
+    if (-not $script:DockerExe) { Complete-AutoGroups $null; return }
+    # Docker reads a test copy first (next to the original, so paths mean the same)
+    # to make sure each service now has exactly the group that was asked for.
+    $tmpPath = Join-Path $script:ComposeDir ('.' + [IO.Path]::GetFileNameWithoutExtension($script:ComposePath) + '.dcm-group' + [IO.Path]::GetExtension($script:ComposePath))
+    try { Write-TextFile @{ Path = $tmpPath; Lines = $file.Lines; Bom = $file.Bom; NewLine = $file.NewLine; EndsWithNewline = $file.EndsWithNewline } }
+    catch {
+        $script:AutoGroupSave = $null
+        [void][Windows.MessageBox]::Show($f.Window, "Couldn't write a test copy next to the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Warning')
+        return
+    }
+    $script:AutoGroupSave.Tmp = $tmpPath
+    $f.Save.IsEnabled = $false
+    $f.Note.Text = 'Checking the changed file with Docker...'
+    Start-DockerCall -Local -Arguments (Get-TidyConfigArguments $tmpPath) -OnDone { param($res) Complete-AutoGroups $res }
+}
+
+function Complete-AutoGroups($Res) {
+    $s = $script:AutoGroupSave
+    $f = $script:AutoGroupForm
+    $script:AutoGroupSave = $null
+    if (-not $s -or -not $f) { if ($s -and $s.Tmp) { Remove-Item -LiteralPath $s.Tmp -Force -ErrorAction SilentlyContinue }; return }
+    if ($s.Tmp) { Remove-Item -LiteralPath $s.Tmp -Force -ErrorAction SilentlyContinue }
+    $f.Save.IsEnabled = $true
+    if ($Res) {
+        $problem = ''
+        if ($Res.ExitCode -ne 0) { $problem = "Docker can't read the changed file: $(Get-FirstLines $Res.Error 3)" }
+        else {
+            try { $cfg = $Res.Output | ConvertFrom-Json } catch { $cfg = $null; $problem = "Docker's answer couldn't be read." }
+            if ($cfg) {
+                foreach ($svc in $s.Done) {
+                    $labels = Get-ServiceLabels (Get-PropValue $cfg.services $svc)
+                    $got = [string]$labels[$s.Label]
+                    if ($got -cne $s.Want[$svc] -and $got -cne $s.Want[$svc].Replace('$', '$$')) { $problem = "$svc doesn't get the group $($s.Want[$svc]) from the changed file."; break }
+                }
+            }
+        }
+        if ($problem) {
+            $f.Note.Text = 'Nothing was saved.'
+            [void][Windows.MessageBox]::Show($f.Window, "Nothing was saved. $problem`n`nThe Check window can show what to fix in the compose file.", $script:AppName, 'OK', 'Warning')
+            return
+        }
+    }
+    if ((Get-FileStamp) -ne $f.Stamp) {
+        [void][Windows.MessageBox]::Show($f.Window, 'The compose file was changed somewhere else in the meantime, so nothing was saved.', $script:AppName, 'OK', 'Warning')
+        return
+    }
+    try {
+        $bak = Backup-ConfigFile $script:ComposePath
+        Write-TextFile $s.File
+    } catch {
+        [void][Windows.MessageBox]::Show($f.Window, "Saving failed: $($_.Exception.Message)", $script:AppName, 'OK', 'Error')
+        return
+    }
+    Write-Activity ("Group automatically: added {0} to {1} service(s): {2}." -f $s.Label, $s.Done.Count, ($s.Done -join ', '))
+    if ($bak) { Write-Activity "Backup: $bak" }
+    $script:FileStamp = Get-FileStamp
+    Request-ConfigLoad
+    $msg = "Added a group to $($s.Done.Count) container(s)."
+    if ($s.Skipped.Count) { $msg += "`n`nLeft as they were:`n" + ($s.Skipped -join "`n") }
+    $msg += "`n`nThey show Changed until you press Apply changes, which recreates them. Their data is kept."
+    if (Get-Machine) { $msg += " They run on $(Get-MachineName), so press Send first." }
+    $f.Window.Close()
+    [void][Windows.MessageBox]::Show($window, $msg, 'Group automatically', 'OK', 'Information')
 }
 
 # ---------------------------------------------------------------------------
@@ -5451,6 +6100,18 @@ $ui.BtnGroupUpdate.Add_Click({ Invoke-GroupAction 'update' })
 $ui.BtnRemoveOrphans.Add_Click({ Invoke-GroupAction 'remove' })
 $ui.BtnRefresh.Add_Click({ Request-ConfigLoad; $script:NextPoll = [DateTime]::MinValue })
 $ui.BtnCheckUpdates.Add_Click({ Start-UpdateCheck })
+$ui.BtnPortainer.Add_Click({ Invoke-Portainer })
+$ui.BtnAutoGroup.Add_Click({ Show-AutoGroup })
+$script:PortainerMenu = New-Object Windows.Controls.ContextMenu
+foreach ($x in @(@('Open Portainer', 'open'), @('Update Portainer...', 'update'), @('Change data folder...', 'folder'))) {
+    $mi = New-Object Windows.Controls.MenuItem
+    $mi.Header = $x[0]
+    $mi.Tag = $x[1]
+    $mi.Add_Click({ param($s) Invoke-Portainer ([string]$s.Tag) })
+    [void]$script:PortainerMenu.Items.Add($mi)
+}
+$ui.BtnPortainer.ContextMenu = $script:PortainerMenu
+Set-MenuTheme $script:PortainerMenu $window
 $ui.BtnView.Add_Click({ Set-ViewMode $(if ($script:Settings.ViewMode -eq 'Cards') { 'List' } else { 'Cards' }); Save-Settings })
 $ui.BtnCancel.Add_Click({ Stop-CurrentJob })
 $ui.BtnLogClear.Add_Click({ $ui.TxtLog.Clear() })
@@ -5669,6 +6330,7 @@ $script:Timer.Add_Tick({
             Update-Background
             Update-Jobs
             Update-ProgressWindow
+            Update-FinishedWindow
             Update-LogWindows
             $now = [DateTime]::Now
             # The compose file or .env saved? Wait a moment for the editor to finish, then re-read.
@@ -5852,6 +6514,7 @@ $machinesXaml = @'
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <TextBlock Text="Name" VerticalAlignment="Center" Margin="0,0,0,8"/>
                     <TextBox x:Name="TxtMName" Grid.Column="1" Style="{StaticResource Field}" Margin="0,0,0,8" ToolTip="Shown in the list at the top, for example NAS"/>
@@ -5880,11 +6543,14 @@ $machinesXaml = @'
                     <TextBlock Grid.Row="5" Text="Web pages on" VerticalAlignment="Center" Margin="0,0,0,8"/>
                     <TextBox x:Name="TxtMWeb" Grid.Row="5" Grid.Column="1" Style="{StaticResource Field}" Margin="0,0,0,8"
                              ToolTip="The address used instead of localhost for web pages. Leave empty to use the SSH address"/>
-                    <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,4,0,0">
+                    <TextBlock Grid.Row="6" Text="Portainer data" VerticalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBox x:Name="TxtMPortainer" Grid.Row="6" Grid.Column="1" Style="{StaticResource Field}" Margin="0,0,0,8"
+                             ToolTip="The folder on that machine where Portainer keeps its data (mounted as /data), for example /volume1/docker/portainer. Asked for the first time you install Portainer there"/>
+                    <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,4,0,0">
                         <Button x:Name="BtnTestMachine" Content="Test connection" Tag="&#xE703;" Style="{StaticResource Btn}"/>
                         <Button x:Name="BtnKeyHelp" Content="SSH key help" Tag="&#xE8D7;" Style="{StaticResource Btn}" Margin="0"/>
                     </StackPanel>
-                    <TextBlock x:Name="TxtMTest" Grid.Row="7" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{StaticResource SoftInk}"/>
+                    <TextBlock x:Name="TxtMTest" Grid.Row="8" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{StaticResource SoftInk}"/>
                 </Grid>
             </Border>
         </Grid>
@@ -5902,6 +6568,7 @@ function Get-MachineFormValues {
         Name = $f.TxtMName.Text.Trim(); Login = $f.TxtMLogin.Text.Trim(); Port = $f.TxtMPort.Text.Trim()
         Folder = $f.TxtMFolder.Text.Trim().TrimEnd('/'); Project = $f.TxtMProject.Text.Trim().ToLowerInvariant(); EnvFile = $(if ($f.CmbMEnv.SelectedIndex -gt 0) { [string]$f.CmbMEnv.SelectedItem } else { '' })
         Docker = $(if ($f.TxtMDocker.Text.Trim()) { $f.TxtMDocker.Text.Trim() } else { 'docker' }); WebHost = $f.TxtMWeb.Text.Trim()
+        Portainer = $f.TxtMPortainer.Text.Trim().TrimEnd('/')
     }
 }
 
@@ -5932,7 +6599,7 @@ function Show-MachineForm {
     $f.BtnRemoveMachine.IsEnabled = $has
     $m = if ($has) { $f.List[$i] } else { [ordered]@{ Name = ''; Login = ''; Port = ''; Folder = ''; Project = ''; EnvFile = ''; Docker = 'docker'; WebHost = '' } }
     $f.TxtMName.Text = $m.Name; $f.TxtMLogin.Text = $m.Login; $f.TxtMPort.Text = $m.Port; $f.TxtMFolder.Text = $m.Folder; $f.TxtMProject.Text = [string]$m.Project
-    $f.TxtMDocker.Text = $m.Docker; $f.TxtMWeb.Text = $m.WebHost
+    $f.TxtMDocker.Text = $m.Docker; $f.TxtMWeb.Text = $m.WebHost; $f.TxtMPortainer.Text = [string]$m.Portainer
     $f.CmbMEnv.SelectedIndex = 0
     if ($m.EnvFile) {
         if (-not $f.CmbMEnv.Items.Contains($m.EnvFile)) { [void]$f.CmbMEnv.Items.Add($m.EnvFile) }
@@ -5951,6 +6618,7 @@ function Test-MachineValues($m, [object[]]$All) {
     if ($m.Folder -notmatch '^/') { return "$($m.Name): Compose folder is the full path on that machine, starting with /, for example /volume1/docker." }
     if ($m.Project -and $m.Project -notmatch '^[a-z0-9][a-z0-9_-]*$') { return "$($m.Name): the project name uses lower-case letters, numbers, - and _." }
     if ($m.Docker -match '[;&|`$<>]') { return "$($m.Name): Docker command should be a program path such as /usr/local/bin/docker." }
+    if ($m.Portainer -and ($m.Portainer -notmatch '^/' -or $m.Portainer -match '[;&|`$<>"'']')) { return "$($m.Name): Portainer data is the full path of a folder on that machine, starting with /, for example /volume1/docker/portainer." }
     return ''
 }
 
@@ -5959,7 +6627,7 @@ function Show-Machines {
     $w.Owner = $window
     if ($window.Icon) { $w.Icon = $window.Icon }
     $f = @{ Window = $w; Loading = $false; Current = -1; List = (New-Object System.Collections.ArrayList); TestRunner = $null; TestTimer = $null }
-    foreach ($n in 'LstMachines', 'BtnAddMachine', 'BtnRemoveMachine', 'MachineForm', 'TxtMName', 'TxtMLogin', 'TxtMPort', 'TxtMFolder', 'TxtMProject', 'CmbMEnv', 'TxtMDocker', 'TxtMWeb',
+    foreach ($n in 'LstMachines', 'BtnAddMachine', 'BtnRemoveMachine', 'MachineForm', 'TxtMName', 'TxtMLogin', 'TxtMPort', 'TxtMFolder', 'TxtMProject', 'CmbMEnv', 'TxtMDocker', 'TxtMWeb', 'TxtMPortainer',
         'BtnTestMachine', 'BtnKeyHelp', 'TxtMTest', 'BtnSaveMachines') { $f[$n] = $w.FindName($n) }
     $script:MachinesForm = $f
     [void]$f.CmbMEnv.Items.Add('(leave .env as it is)')
@@ -5971,7 +6639,7 @@ function Show-Machines {
         [void]$f.LstMachines.Items.Add($m.Name)
     }
     $f.LstMachines.Add_SelectionChanged({ $f = $script:MachinesForm; if ($f.Loading) { return }; Save-MachineForm; Show-MachineForm })
-    foreach ($n in 'TxtMName', 'TxtMLogin', 'TxtMPort', 'TxtMFolder', 'TxtMProject', 'TxtMDocker', 'TxtMWeb') { $f[$n].Add_TextChanged({ Save-MachineForm }) }
+    foreach ($n in 'TxtMName', 'TxtMLogin', 'TxtMPort', 'TxtMFolder', 'TxtMProject', 'TxtMDocker', 'TxtMWeb', 'TxtMPortainer') { $f[$n].Add_TextChanged({ Save-MachineForm }) }
     $f.CmbMEnv.Add_SelectionChanged({ Save-MachineForm })
     $f.BtnAddMachine.Add_Click({
             $f = $script:MachinesForm

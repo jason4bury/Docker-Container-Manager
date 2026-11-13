@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.05] - 2026-11-13
+
+### Added
+- **Group automatically (n)...** in the bar above the list when some services have no group label. It suggests a group for each
+  from its image and service name, reusing the groups already in the file, and shows the list to change before anything is saved.
+  Save adds one group label to each of those services (list or map style, as in the file), checks the result with Docker,
+  backs up the compose file and saves it. Services that already have a group are never touched.
+- **Portainer** button: opens Portainer on the chosen machine, starts it when it's stopped, or installs it
+  (portainer/portainer-ee on ports 8000 and 9000) after showing the docker run line. Right-click it to update Portainer
+  (keeping the data folder it uses now) or change its data folder.
+- **Portainer data** folder for each machine in the Machines window (and for This PC in the settings). Portainer Business asks
+  for its licence key in its own page; the app never stores it.
+- **Finished** box: when Docker has finished and the progress window isn't showing (you pressed **Hide**, or it's turned
+  off), a box in the bottom-right corner of the screen says Done or Didn't work, with the last thing Docker said and
+  **Show log** for failures. It stays on top without taking the focus, closes itself after 10 seconds on success, and can be
+  turned off in Settings.
+
+### Fixed
+- The **Stop group** question didn't name the group (it read "in ?").
+- A service with a single label in list form had its labels read wrongly when the app checked a changed file.
+
 ## [1.04] - 2026-11-13
 
 ### Changed

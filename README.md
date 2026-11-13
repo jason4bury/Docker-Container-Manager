@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.04-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.05-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -14,6 +14,7 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 
 - **Every service at a glance**: live state (running, healthy, unhealthy, stopped, exited with an error, not created), how long it's been up, its web page, its image and a note when something needs doing. The list refreshes every few seconds.
 - **Groups that live in the compose file.** Add a `home.group` label to a service and it's listed under that group, with running/total counts and a red dot when something in the group has a problem. The labels travel with the file, so every machine you copy it to shows the same groups.
+- **Group automatically**: suggests a group for every service that has none, from its image name (sonarr and radarr under Downloads, postgres under Databases, and so on), reusing the groups already in the file. You check and change the list before anything is saved.
 - **Start, Stop, Restart, Update and Recreate** for one container, a selection, a whole group or everything. Update pulls the newest images and recreates what changed, keeps stopped containers stopped, and can tidy away unused images afterwards.
 - **Keeps up with the compose file.** Save the file (or `.env`) and it's read again straight away:
   - new services appear,
@@ -24,6 +25,7 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **Check compose file**: finds broken `${...}` variables, spacing mistakes (tabs, uneven indents, a setting indented into the wrong section, a missing space after `:` or `-`), host ports used twice, duplicate names, `depends_on` pointing at nothing, values missing from `.env`, missing folders, services without a group, unpinned images and passwords written in the file. Double-click a result to open the file at that line. The header button shows how many errors and warnings there are.
 - **Activity log** showing every docker command it runs and what Docker said, with Cancel.
 - **Progress window** while containers start, stop or update, with Docker's output as it happens. It closes itself 10 seconds after the work succeeds, counting down on its Close button.
+- **Finished box**: if you pressed **Hide** on the progress window (or turned it off), a box in the bottom-right corner says when Docker has finished. Success closes itself after 10 seconds; a failure shows what Docker said, with **Show log**, and stays until closed.
 - **Tray icon** with Start and Stop for each group.
 - **Helpful banners** when Docker isn't running (with **Start Docker Desktop**), when the compose file has an error (the last good list stays), or when a folder has `Env_*` templates but no `.env` yet.
 - **Configure** a container: change its environment variables, API keys and passwords, move values written in the compose file into `.env`, add new variables, and open its host folders, a shell inside it, its web page or logs. **Save and recreate** restarts it with the new values.
@@ -31,8 +33,9 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **Disk usage**: how much space images, containers, volumes and the build cache take, which containers use each image, and one-click clean-up of old images, the build cache, unused networks and (after listing them and asking twice) unused volumes.
 - **Tidy spacing**: re-indents the compose file to two spaces per level, and only saves it when Docker reads the result exactly the same as before.
 - **List or cards**, **dark mode**, **app icons** and a **colour for each group**.
+- **Portainer**: one button opens Portainer on the chosen machine, starts it when it's stopped, or installs it after showing the `docker run` line.
 - **Other machines**: manage the same compose file on a Linux laptop, a VM or a Synology NAS over SSH, from the machine list at the top. **Send** copies the compose file and that machine's `Env_` file (as `.env`) across.
-- Only changes the compose file or `.env` when you save in a Configure window or tidy the spacing, and backs both up first. Nothing is installed; settings are in `%APPDATA%`. The exe is self-contained.
+- Only changes the compose file or `.env` when you save in a Configure window, tidy the spacing or save groups, and backs both up first. Nothing is installed; settings are in `%APPDATA%`. The exe is self-contained.
 
 ## 🖼️ Screenshots
 
@@ -49,7 +52,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-**Exe:** download `Docker Container Manager v1.04.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
+**Exe:** download `Docker Container Manager v1.05.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
 
 **Script:** clone this repo and run `Start Docker Container Manager.cmd`. It starts `src\Docker-Container-Manager.ps1` with the execution policy bypassed for that run only.
 
@@ -124,9 +127,21 @@ services:
 
 Adding or changing a label counts as a change to the service, so the app marks it **Changed** and **Apply changes** recreates it once.
 
+### Group automatically
+
+When some services have no `home.group` label, the bar above the list shows **Group automatically (n)...**. It lists those services with a suggested group for each, worked out from the image and service name. Groups already in the file are reused: if radarr is already under `Arr`, sonarr is suggested for `Arr` too. Services it doesn't recognise are left empty.
+
+Change any group, type a new one, or clear it to leave that service ungrouped, then press **Save groups**. The app:
+
+1. adds one `home.group` line to each of those services (in the same list or map style as the rest of the file, adding `labels:` where a service has none) and changes nothing else,
+2. has Docker read a test copy first to make sure each service gets exactly that group,
+3. backs up the compose file to `%APPDATA%\Docker Container Manager\Backups` and saves it.
+
+Services that already have a group are never touched. The grouped services show **Changed** until you press **Apply changes**; with another machine picked, press **Send** first.
+
 ### Settings
 
-**Settings** in the header sets the label prefix, how often the status is checked (15 seconds by default, 30 when the window is in the tray), the editor for **Edit** and **.env** (Visual Studio Code at `C:\Program Files\Microsoft VS Code\code.exe` by default, Notepad when it's empty or not found), whether Update removes unused images, whether stopping a group asks first, whether minimising hides the window in the tray instead of the taskbar (off by default), the theme (System, Light or Dark), whether app icons are shown, whether to check for newer images when the app starts, and whether to show the progress window.
+**Settings** in the header sets the label prefix, how often the status is checked (15 seconds by default, 30 when the window is in the tray), the editor for **Edit** and **.env** (Visual Studio Code at `C:\Program Files\Microsoft VS Code\code.exe` by default, Notepad when it's empty or not found), whether Update removes unused images, whether stopping a group asks first, whether minimising hides the window in the tray instead of the taskbar (off by default), the theme (System, Light or Dark), whether app icons are shown, whether to check for newer images when the app starts, whether to show the progress window, and whether to show a Finished box when the progress window was hidden.
 
 Downloaded icons are kept in `%LOCALAPPDATA%\Docker Container Manager\Icons` and the last update check in `%APPDATA%\Docker Container Manager\updates.json`. Icon downloads send only the icon name (for example `sonarr.png`) to the jsDelivr CDN; turn icons off in Settings if you'd rather not.
 
@@ -147,6 +162,7 @@ The list at the top left switches between **This PC** and other machines that ru
 | Project | The compose project name the containers were started with on that machine, if it isn't the folder's name (Synology Container Manager uses the project's name). **Test connection** lists the running projects. |
 | Docker command | Usually `docker`. The app also looks in `/usr/local/bin`, where Synology keeps it. |
 | Web pages on | The address used instead of `localhost` for web pages (the SSH address if empty). |
+| Portainer data | The folder on that machine where Portainer keeps its data, for example `/volume1/docker/portainer`. Asked for the first time you install Portainer there. |
 
 The two lists at the top are captioned **Containers on** (which machine's Docker the app shows and controls) and **Compose file**. Each machine remembers the compose file on this PC you last used with it. With another machine picked, the compose file box reads **Send from:**, because that machine runs its own copy of the file (in its compose folder); the file on this PC is what **Send** copies there and what **Configure** edits. The usual routine for a NAS: pick it in **Containers on**, edit the master copy (**Edit** or **Configure**), press **Send**, then **Apply changes**.
 
@@ -157,6 +173,24 @@ With a machine picked, every docker command (status, start, stop, update, logs, 
 - **Send** backs up the compose file and `.env` on the machine (as dated `.bak` copies), then copies your compose file and the machine's `Env_` file there. Nothing is restarted; services whose settings changed show **Changed**, and **Apply changes** recreates them.
 - **Configure** saves values to the machine's `Env_` file on this PC, and **Save and recreate** sends it before recreating.
 - **Tidy spacing** and **Check** work on the file on this PC.
+
+### Portainer
+
+**Portainer**, next to **Cards** above the list, works on the machine picked in **Containers on**:
+
+- **Running**: opens Portainer's web page on port 9000 (on the machine's address for other machines).
+- **Stopped**: starts it (`docker start portainer`), then opens it.
+- **Not installed**: asks where Portainer should keep its data, shows the full command and asks before running it:
+
+  ```text
+  docker run -d -p 8000:8000 -p 9000:9000 --name portainer --restart=unless-stopped -v /var/run/docker.sock:/var/run/docker.sock -v <data folder>:/data portainer/portainer-ee
+  ```
+
+Right-click the button for **Update Portainer...** (pulls the newest image and makes the container again with the data folder it uses now, so settings, users and the licence are kept) and **Change data folder...**.
+
+The data folder is kept for each machine: the **Portainer data** field in the Machines window, and the settings file for This PC. The first suggestion is `docker_configs\portainer` next to the compose file on this PC, `/volume1/docker/portainer` on a Synology, and `/home/<user>/docker_configs/portainer` on other Linux machines.
+
+Portainer Business asks for its licence key in its own web page the first time you open it, and keeps it in its data folder. The app never asks for, sees or stores the key. Portainer controls Docker on its machine through the Docker socket, so it is only installed or started when you press the button.
 
 ## 📝 Changelog
 
