@@ -29,10 +29,10 @@
     Opens the window with the last compose file used.
 
 .EXAMPLE
-    "Docker Container Manager v1.08.exe" -ComposeFile "D:\Docker\docker-compose.yml"
+    "Docker Container Manager v1.09.exe" -ComposeFile "D:\Docker\docker-compose.yml"
 
 .NOTES
-    Version:   1.08 (keep in step with CHANGELOG.md)
+    Version:   1.09 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -44,7 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.08'
+$script:AppVersion = '1.09'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 
 #region BUNDLE-ASSETS
@@ -457,6 +457,8 @@ $script:UngroupedName  = 'Ungrouped'
 $script:OrphanName     = 'Not in compose file'
 $script:FinishedJobs   = New-Object System.Collections.ArrayList
 $script:FinishedForm   = $null
+$script:SaveGroupsBox  = $null   # the "Saving groups" box while Save groups runs
+$script:SaveGroupsNext = $null
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -2305,13 +2307,43 @@ function Update-RecentList {
             $item.Content = '{0}{1}  ({2})' -f $prefix, (Split-Path -Leaf (Split-Path -Parent $f)), $f
             $item.Tag = $f
             $item.ToolTip = $f
+            if ($f -eq $script:ComposePath) { $item.FontWeight = 'SemiBold' }
+            else {
+                # Right-click: take it off this list (the file itself is never touched).
+                $menu = New-Object Windows.Controls.ContextMenu
+                $rm = New-Object Windows.Controls.MenuItem -Property @{ Header = 'Remove from list'; Tag = $f; ToolTip = "Takes it off this list only. The file stays where it is:`n$f" }
+                $rm.Add_Click({ Remove-RecentFile ([string]$this.Tag) })
+                [void]$menu.Items.Add($rm)
+                Set-MenuTheme $menu $window
+                $item.ContextMenu = $menu
+            }
             [void]$ui.CmbRecent.Items.Add($item)
             if ($f -eq $script:ComposePath) { $ui.CmbRecent.SelectedItem = $item }
         }
-        $ui.PnlRecent.Visibility = if ($ui.CmbRecent.Items.Count) { 'Visible' } else { 'Collapsed' }
+        # Last entry: pick a compose file that isn't in the list yet.
+        if ($ui.CmbRecent.Items.Count) { [void]$ui.CmbRecent.Items.Add((New-Object Windows.Controls.Separator)) }
+        $other = New-Object Windows.Controls.ComboBoxItem
+        $other.Content = 'Other compose file...'
+        $other.Tag = $script:OtherComposeTag
+        $other.FontStyle = 'Italic'
+        $other.ToolTip = 'Choose a compose file anywhere on this PC (the same as the Compose file... button)'
+        [void]$ui.CmbRecent.Items.Add($other)
+        $ui.PnlRecent.Visibility = if (@($script:Settings.RecentFiles).Count) { 'Visible' } else { 'Collapsed' }
     } finally {
         $script:UpdatingRecent = $false
     }
+}
+
+# The Tag of the "Other compose file..." entry: never a path, never saved.
+$script:OtherComposeTag = '<other>'
+
+# Takes a compose file off the list in the header (settings.json only, never the file on disk).
+function Remove-RecentFile([string]$Path) {
+    if (-not $Path -or $Path -eq $script:ComposePath) { return }
+    $script:Settings.RecentFiles = @($script:Settings.RecentFiles | Where-Object { $_ -and $_ -ne $Path })
+    Save-Settings
+    Update-RecentList
+    Write-Activity "Took $Path off the compose file list. The file itself wasn't touched."
 }
 
 function Select-ComposeFile {
@@ -5276,8 +5308,12 @@ $settingsXaml = @'
                         <TextBlock x:Name="TxtEditorCheckIcon" FontFamily="Segoe MDL2 Assets" FontSize="12" Margin="1,3,8,0" VerticalAlignment="Top"/>
                         <StackPanel Grid.Column="1">
                             <TextBlock x:Name="TxtEditorCheck" FontSize="12" TextWrapping="Wrap"/>
-                            <Button x:Name="BtnEditorUse" Style="{StaticResource LinkBtn}" FontSize="12" HorizontalAlignment="Left" Margin="0,3,0,0" Visibility="Collapsed"
-                                    ToolTip="Put this editor in the box (saved when you press Save)"/>
+                            <WrapPanel Margin="0,3,0,0">
+                                <Button x:Name="BtnEditorUse" Style="{StaticResource LinkBtn}" FontSize="12" Margin="0,0,14,0" Visibility="Collapsed"
+                                        ToolTip="Put this editor in the box (saved when you press Save)"/>
+                                <Button x:Name="BtnEditorOther" Content="Choose another editor..." Style="{StaticResource LinkBtn}" FontSize="12"
+                                        ToolTip="Pick any program on this PC, wherever it's installed (saved when you press Save)"/>
+                            </WrapPanel>
                         </StackPanel>
                     </Grid>
                 </StackPanel>
@@ -5354,13 +5390,40 @@ function Get-EditorName([string]$Path) {
     return $name
 }
 
+# Where Windows says a program is installed, wherever that is: its App Paths entry,
+# its uninstall entry (InstallLocation or DisplayIcon) and, for VS Code, code.cmd on the PATH.
+function Find-InstalledEditor([string]$Exe, [string]$DisplayName, [string]$OnPath) {
+    $found = New-Object System.Collections.ArrayList
+    foreach ($hive in 'HKCU:', 'HKLM:') {
+        try {
+            $v = (Get-ItemProperty -LiteralPath "$hive\Software\Microsoft\Windows\CurrentVersion\App Paths\$Exe" -ErrorAction Stop).'(default)'
+            if ($v) { [void]$found.Add(([string]$v).Trim('"')) }
+        } catch { Write-Verbose "No App Paths entry for $Exe in $hive." }
+    }
+    foreach ($key in 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall') {
+        foreach ($app in @(Get-ItemProperty -Path "$key\*" -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like $DisplayName })) {
+            if ($app.InstallLocation) { [void]$found.Add((Join-Path ([string]$app.InstallLocation).Trim('"') $Exe)) }
+            if ($app.DisplayIcon) { [void]$found.Add((([string]$app.DisplayIcon) -replace ',\s*-?\d+$', '').Trim('"')) }
+        }
+    }
+    if ($OnPath) {
+        # VS Code puts bin\code.cmd on the PATH; Code.exe is one folder up.
+        foreach ($c in @(Get-Command $OnPath -CommandType Application -ErrorAction SilentlyContinue)) {
+            [void]$found.Add((Join-Path (Split-Path (Split-Path $c.Source -Parent) -Parent) $Exe))
+        }
+    }
+    return @($found | Where-Object { $_ -and [IO.Path]::GetFileName($_) -ieq $Exe } | Select-Object -Unique)
+}
+
 # The first editor found on this PC (VS Code, then Notepad++, then Notepad), other than $Skip.
 function Find-Editor([string]$Skip) {
     $candidates = @(
         (Join-Path $env:ProgramFiles 'Microsoft VS Code\Code.exe'),
-        $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe' }),
+        $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe' })
+    ) + @(Find-InstalledEditor 'Code.exe' 'Microsoft Visual Studio Code*' 'code.cmd') + @(
         (Join-Path $env:ProgramFiles 'Notepad++\notepad++.exe'),
-        $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'Notepad++\notepad++.exe' }),
+        $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'Notepad++\notepad++.exe' })
+    ) + @(Find-InstalledEditor 'notepad++.exe' 'Notepad++*' '') + @(
         (Join-Path ([Environment]::SystemDirectory) 'notepad.exe'),
         $(if ($env:WINDIR) { Join-Path $env:WINDIR 'notepad.exe' })
     )
@@ -5404,12 +5467,30 @@ function Update-EditorCheck {
     }
 }
 
+# Pick the editor with a file dialog, starting where the box points (or Program Files).
+function Select-EditorFile {
+    $s = $script:SettingsForm
+    $dlg = New-Object Microsoft.Win32.OpenFileDialog
+    $dlg.Title = 'Choose your editor'
+    $dlg.Filter = 'Programs (*.exe;*.cmd;*.bat)|*.exe;*.cmd;*.bat|All files (*.*)|*.*'
+    $start = ''
+    foreach ($p in @((Resolve-EditorPath $s.TxtEditor.Text), [string]$s.EditorSuggestion)) {
+        if (-not $p) { continue }
+        try {
+            $dir = if (Test-Path -LiteralPath $p -PathType Container) { $p } else { Split-Path -Path $p -Parent }
+            if ($dir -and (Test-Path -LiteralPath $dir -PathType Container)) { $start = $dir; break }
+        } catch { Write-Verbose "Not a usable folder: $p" }
+    }
+    $dlg.InitialDirectory = if ($start) { $start } else { $env:ProgramFiles }
+    if ($dlg.ShowDialog($s.Window)) { $s.TxtEditor.Text = $dlg.FileName; Update-EditorCheck }
+}
+
 function Show-Settings {
     $w = New-XamlObject $settingsXaml
     $w.Owner = $window
     if ($window.Icon) { $w.Icon = $window.Icon }
     $f = @{ Window = $w; Saved = $false }
-    foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'BtnEditorCheck', 'PnlEditorCheck', 'TxtEditorCheckIcon', 'TxtEditorCheck', 'BtnEditorUse', 'CmbTheme', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'ChkIcons', 'ChkUpdates', 'ChkProgress', 'ChkFinished', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
+    foreach ($n in 'TxtPrefix', 'TxtPrefixHelp', 'TxtRefresh', 'TxtEditor', 'BtnEditor', 'BtnEditorCheck', 'PnlEditorCheck', 'TxtEditorCheckIcon', 'TxtEditorCheck', 'BtnEditorUse', 'BtnEditorOther', 'CmbTheme', 'ChkPrune', 'ChkConfirm', 'ChkTray', 'ChkIcons', 'ChkUpdates', 'ChkProgress', 'ChkFinished', 'TxtWhere', 'BtnSaveSettings') { $f[$n] = $w.FindName($n) }
     $w.FindName('BtnSourceLinks').Add_Click({ Edit-SourceList })
     $script:SettingsForm = $f
     $f.TxtPrefix.Text = $script:Settings.LabelPrefix
@@ -5427,11 +5508,8 @@ function Show-Settings {
     $f.TxtWhere.Text = "Saved in $script:SettingsPath"
     Update-PrefixHelp
     $f.TxtPrefix.Add_TextChanged({ Update-PrefixHelp })
-    $f.BtnEditor.Add_Click({
-            $dlg = New-Object Microsoft.Win32.OpenFileDialog
-            $dlg.Filter = 'Programs (*.exe;*.cmd;*.bat)|*.exe;*.cmd;*.bat'
-            if ($dlg.ShowDialog($script:SettingsForm.Window)) { $script:SettingsForm.TxtEditor.Text = $dlg.FileName; Update-EditorCheck }
-        })
+    $f.BtnEditor.Add_Click({ Select-EditorFile })
+    $f.BtnEditorOther.Add_Click({ Select-EditorFile })
     $f.BtnEditorCheck.Add_Click({ Update-EditorCheck })
     $f.BtnEditorUse.Add_Click({
             $s = $script:SettingsForm
@@ -5487,6 +5565,11 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.09' = @(
+        'Compose file list: Other compose file... at the end picks a file anywhere on this PC, and right-click an entry for Remove from list (the file itself is never touched).',
+        'Settings: Check also finds VS Code and Notepad++ wherever Windows says they''re installed (not only the usual folders), and Choose another editor... under the result lets you pick any program.',
+        'Group automatically: Save groups shows a Saving groups box with each step as it happens (adding the labels, checking a test copy, the backup, writing and checking the file, reloading). If a step fails it says why, and the compose file is left as it was.'
+    )
     '1.08' = @(
         'Disk usage: smaller clean-up buttons sit in each card next to the space they free, off when there''s nothing to free. Volumes (which deletes data) is red, and each tooltip says exactly what it runs.',
         'Settings: a Check button beside the editor says whether the program is there. If it isn''t, it offers Visual Studio Code, Notepad++ or Notepad, and Use fills the box (saved when you press Save).',
@@ -6151,6 +6234,132 @@ function Show-AutoGroup {
     $script:AutoGroupSave = $null
 }
 
+# "Saving groups": a small box over the Group automatically window that shows each
+# step of the save as it happens. Each step runs on its own turn of the window's
+# dispatcher (and the Docker check runs in the background), so the app keeps
+# drawing. If a step fails, the box says why and the compose file is left as it was.
+$saveGroupsXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Saving groups" Width="460" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <StackPanel Margin="18,16,18,16">
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock x:Name="SgGlyph" FontFamily="Segoe MDL2 Assets" FontSize="20" Text="&#xE74E;" Foreground="{StaticResource Accent}"
+                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+            <StackPanel Grid.Column="1">
+                <TextBlock x:Name="SgTitle" Text="Saving groups" FontSize="16" FontWeight="SemiBold"/>
+                <TextBlock x:Name="SgStatus" Foreground="{StaticResource SoftInk}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+            </StackPanel>
+        </Grid>
+        <ProgressBar x:Name="SgBar" Height="8" Margin="0,12,0,10" Minimum="0" Maximum="1"
+                     Foreground="{StaticResource Accent}" Background="{StaticResource AccentSoft}" BorderThickness="0"/>
+        <StackPanel x:Name="SgSteps"/>
+        <Border x:Name="SgErrorBox" Background="%%ErrorBg%%" BorderBrush="%%ErrorEdge%%" BorderThickness="1" CornerRadius="6"
+                Padding="10,8" Margin="0,10,0,0" Visibility="Collapsed">
+            <TextBlock x:Name="SgError" TextWrapping="Wrap"/>
+        </Border>
+        <Button x:Name="SgClose" Content="Close" Style="{StaticResource PrimaryBtn}" HorizontalAlignment="Right" Margin="0,14,0,0"
+                IsCancel="True" IsDefault="True" Visibility="Collapsed"/>
+    </StackPanel>
+</Window>
+'@
+
+$script:SaveGroupSteps = [ordered]@{
+    Labels = 'Adding the group labels'
+    Check  = 'Checking a test copy with Docker'
+    Backup = 'Making a backup of the compose file'
+    Write  = 'Writing the compose file'
+    Verify = 'Checking the saved file'
+    Reload = 'Reloading the list'
+}
+
+function Show-SaveGroupsBox($Owner) {
+    $w = New-XamlObject $saveGroupsXaml
+    $w.Owner = $Owner
+    if ($window.Icon) { $w.Icon = $window.Icon }
+    $b = @{ Window = $w; Busy = $true; Rows = @{} }
+    foreach ($n in 'SgGlyph', 'SgTitle', 'SgStatus', 'SgBar', 'SgSteps', 'SgErrorBox', 'SgError', 'SgClose') { $b[$n] = $w.FindName($n) }
+    $b.SgBar.Maximum = $script:SaveGroupSteps.Count
+    foreach ($k in $script:SaveGroupSteps.Keys) {
+        $row = New-Object Windows.Controls.Grid
+        $row.Margin = '0,2,0,2'
+        [void]$row.ColumnDefinitions.Add((New-Object Windows.Controls.ColumnDefinition -Property @{ Width = [Windows.GridLength]::Auto }))
+        [void]$row.ColumnDefinitions.Add((New-Object Windows.Controls.ColumnDefinition))
+        $glyph = New-Object Windows.Controls.TextBlock -Property @{ FontFamily = 'Segoe MDL2 Assets'; FontSize = 12; Width = 22; VerticalAlignment = 'Center'; Text = [string][char]0xEA3A }
+        $glyph.Foreground = $w.FindResource('Off')
+        $text = New-Object Windows.Controls.TextBlock -Property @{ Text = $script:SaveGroupSteps[$k]; TextWrapping = 'Wrap' }
+        $text.Foreground = $w.FindResource('SoftInk')
+        [Windows.Controls.Grid]::SetColumn($text, 1)
+        [void]$row.Children.Add($glyph)
+        [void]$row.Children.Add($text)
+        [void]$b.SgSteps.Children.Add($row)
+        $b.Rows[$k] = @{ Glyph = $glyph; Text = $text }
+    }
+    $b.SgClose.Add_Click({ $s = $script:SaveGroupsBox; if ($s) { $s.Window.Close() } })
+    # While it's working the box can't be closed; afterwards Close or Esc closes it.
+    $w.Add_Closing({ param($src, $e) if ($script:SaveGroupsBox -and $script:SaveGroupsBox.Busy) { $e.Cancel = $true } })
+    $w.Add_Closed({
+            $script:SaveGroupsBox = $null
+            if ($script:AutoGroupForm) { $script:AutoGroupForm.Window.IsEnabled = $true; [void]$script:AutoGroupForm.Window.Activate() }
+        })
+    $script:SaveGroupsBox = $b
+    # Modal for the Group automatically window, without blocking the code that does the work.
+    $Owner.IsEnabled = $false
+    $w.Show()
+    return $b
+}
+
+# Marks a step as running, done, skipped or failed, with an optional note after its name.
+function Set-SaveGroupsStep([string]$Step, [string]$State, [string]$Note = '') {
+    $b = $script:SaveGroupsBox
+    if (-not $b) { return }
+    $r = $b.Rows[$Step]
+    $name = $script:SaveGroupSteps[$Step]
+    $r.Text.Text = if ($Note) { "$name  $([char]0x00B7)  $Note" } else { $name }
+    switch ($State) {
+        'running' { $r.Glyph.Text = [string][char]0xE768; $r.Glyph.Foreground = $b.Window.FindResource('Accent'); $r.Text.Foreground = $b.Window.FindResource('Ink'); $r.Text.FontWeight = 'SemiBold'; $b.SgStatus.Text = if ($Note) { "$name ($Note)..." } else { "$name..." } }
+        'done' { $r.Glyph.Text = [string][char]0xE73E; $r.Glyph.Foreground = $b.Window.FindResource('Ok'); $r.Text.Foreground = $b.Window.FindResource('Ink'); $r.Text.FontWeight = 'Normal' }
+        'skipped' { $r.Glyph.Text = [string][char]0xE738; $r.Glyph.Foreground = $b.Window.FindResource('Off'); $r.Text.Foreground = $b.Window.FindResource('SoftInk'); $r.Text.FontWeight = 'Normal' }
+        'failed' { $r.Glyph.Text = [string][char]0xE711; $r.Glyph.Foreground = $b.Window.FindResource('Bad'); $r.Text.Foreground = $b.Window.FindResource('Bad'); $r.Text.FontWeight = 'SemiBold' }
+    }
+    $i = [array]::IndexOf(@($script:SaveGroupSteps.Keys), $Step)
+    if ($State -eq 'running') { $b.SgBar.Value = $i } elseif ($State -ne 'failed') { $b.SgBar.Value = $i + 1 }
+}
+
+# Stops with an error: says what went wrong, and lets the box be closed.
+function Stop-SaveGroups([string]$Step, [string]$Message) {
+    $s = $script:AutoGroupSave
+    $script:AutoGroupSave = $null
+    if ($s -and $s.Tmp) { Remove-Item -LiteralPath $s.Tmp -Force -ErrorAction SilentlyContinue }
+    if ($script:AutoGroupForm) { $script:AutoGroupForm.Save.IsEnabled = $true; $script:AutoGroupForm.Note.Text = 'Nothing was saved.' }
+    $b = $script:SaveGroupsBox
+    if (-not $b) { [void][Windows.MessageBox]::Show($window, $Message, $script:AppName, 'OK', 'Warning'); return }
+    if ($Step) { Set-SaveGroupsStep $Step 'failed' }
+    $b.Busy = $false
+    $b.SgTitle.Text = "Groups weren't saved"
+    $b.SgGlyph.Text = [string][char]0xEA39
+    $b.SgGlyph.Foreground = $b.Window.FindResource('Bad')
+    $b.SgStatus.Text = 'The compose file is as it was.'
+    $b.SgBar.Foreground = $b.Window.FindResource('Bad')
+    $b.SgError.Text = $Message
+    $b.SgErrorBox.Visibility = 'Visible'
+    $b.SgClose.Visibility = 'Visible'
+    [void]$b.SgClose.Focus()
+    Write-Activity "Group automatically: nothing was saved. $Message"
+}
+
+# Runs the next step once the box has been drawn.
+function Invoke-SaveGroupsNext([scriptblock]$Next) {
+    $script:SaveGroupsNext = $Next
+    [void]$window.Dispatcher.BeginInvoke([Action] {
+            $n = $script:SaveGroupsNext; $script:SaveGroupsNext = $null
+            if ($n -and $script:AutoGroupSave) { & $n }
+        }, [Windows.Threading.DispatcherPriority]::Background)
+}
+
 function Save-AutoGroups {
     $f = $script:AutoGroupForm
     if (-not $f -or $script:AutoGroupSave) { return }
@@ -6164,41 +6373,57 @@ function Save-AutoGroups {
     }
     try { $file = Read-TextFile $script:ComposePath }
     catch { [void][Windows.MessageBox]::Show($f.Window, "Couldn't read the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Error'); return }
-    $form = Get-LabelForm $file.Lines ([string]$script:Settings.LabelPrefix)
-    $done = New-Object System.Collections.ArrayList
-    $skipped = New-Object System.Collections.ArrayList
-    foreach ($svc in $want.Keys) {
-        $why = Add-ServiceLabel $file.Lines $svc $label $want[$svc] $form
-        if ($why) { [void]$skipped.Add("$svc ($why)") } else { [void]$done.Add($svc) }
-    }
-    if (-not $done.Count) {
-        [void][Windows.MessageBox]::Show($f.Window, "Nothing could be added:`n`n" + ($skipped -join "`n"), $script:AppName, 'OK', 'Warning')
-        return
-    }
-    $script:AutoGroupSave = @{ File = $file; Want = $want; Done = $done; Skipped = $skipped; Label = $label; Tmp = '' }
-    if (-not $script:DockerExe) { Complete-AutoGroups $null; return }
-    # Docker reads a test copy first (next to the original, so paths mean the same)
-    # to make sure each service now has exactly the group that was asked for.
-    $tmpPath = Join-Path $script:ComposeDir ('.' + [IO.Path]::GetFileNameWithoutExtension($script:ComposePath) + '.dcm-group' + [IO.Path]::GetExtension($script:ComposePath))
-    try { Write-TextFile @{ Path = $tmpPath; Lines = $file.Lines; Bom = $file.Bom; NewLine = $file.NewLine; EndsWithNewline = $file.EndsWithNewline } }
-    catch {
-        $script:AutoGroupSave = $null
-        [void][Windows.MessageBox]::Show($f.Window, "Couldn't write a test copy next to the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Warning')
-        return
-    }
-    $script:AutoGroupSave.Tmp = $tmpPath
     $f.Save.IsEnabled = $false
-    $f.Note.Text = 'Checking the changed file with Docker...'
+    $script:AutoGroupSave = @{
+        File = $file; Want = $want; Services = @($want.Keys); Index = 0; Form = (Get-LabelForm $file.Lines ([string]$script:Settings.LabelPrefix))
+        Done = (New-Object System.Collections.ArrayList); Skipped = (New-Object System.Collections.ArrayList); Label = $label; Tmp = ''; Bak = ''
+    }
+    [void](Show-SaveGroupsBox $f.Window)
+    Set-SaveGroupsStep 'Labels' 'running' "0 of $($want.Count)"
+    Invoke-SaveGroupsNext { Add-SaveGroupsLabel }
+}
+
+# Step 1: one label per turn, so the count moves (n of N).
+function Add-SaveGroupsLabel {
+    $s = $script:AutoGroupSave
+    $svc = $s.Services[$s.Index]
+    $why = Add-ServiceLabel $s.File.Lines $svc $s.Label $s.Want[$svc] $s.Form
+    if ($why) { [void]$s.Skipped.Add("$svc ($why)") } else { [void]$s.Done.Add($svc) }
+    $s.Index++
+    Set-SaveGroupsStep 'Labels' 'running' "$($s.Index) of $($s.Services.Count)"
+    if ($s.Index -lt $s.Services.Count) { Invoke-SaveGroupsNext { Add-SaveGroupsLabel }; return }
+    if (-not $s.Done.Count) { Stop-SaveGroups 'Labels' ("Nothing could be added:`n" + ($s.Skipped -join "`n")); return }
+    $note = "$($s.Done.Count) of $($s.Services.Count)"
+    if ($s.Skipped.Count) { $note += ", $($s.Skipped.Count) left as they were" }
+    Set-SaveGroupsStep 'Labels' 'done' $note
+    Set-SaveGroupsStep 'Check' 'running'
+    Invoke-SaveGroupsNext { Test-SaveGroupsCopy }
+}
+
+# Step 2: Docker reads a test copy first (next to the original, so paths mean the same)
+# to make sure each service now has exactly the group that was asked for.
+function Test-SaveGroupsCopy {
+    $s = $script:AutoGroupSave
+    if (-not $script:DockerExe) { Set-SaveGroupsStep 'Check' 'skipped' "docker.exe wasn't found"; Invoke-SaveGroupsNext { Complete-AutoGroups $null }; return }
+    $tmpPath = Join-Path $script:ComposeDir ('.' + [IO.Path]::GetFileNameWithoutExtension($script:ComposePath) + '.dcm-group' + [IO.Path]::GetExtension($script:ComposePath))
+    try { Write-TextFile @{ Path = $tmpPath; Lines = $s.File.Lines; Bom = $s.File.Bom; NewLine = $s.File.NewLine; EndsWithNewline = $s.File.EndsWithNewline } }
+    catch { Stop-SaveGroups 'Check' "Couldn't write a test copy next to the compose file: $($_.Exception.Message)"; return }
+    $s.Tmp = $tmpPath
+    if ($script:AutoGroupForm) { $script:AutoGroupForm.Note.Text = 'Checking the changed file with Docker...' }
     Start-DockerCall -Local -Arguments (Get-TidyConfigArguments $tmpPath) -OnDone { param($res) Complete-AutoGroups $res }
 }
 
+# Steps 2 (Docker's answer) to 6.
 function Complete-AutoGroups($Res) {
     $s = $script:AutoGroupSave
     $f = $script:AutoGroupForm
-    $script:AutoGroupSave = $null
-    if (-not $s -or -not $f) { if ($s -and $s.Tmp) { Remove-Item -LiteralPath $s.Tmp -Force -ErrorAction SilentlyContinue }; return }
-    if ($s.Tmp) { Remove-Item -LiteralPath $s.Tmp -Force -ErrorAction SilentlyContinue }
-    $f.Save.IsEnabled = $true
+    if (-not $s -or -not $f) {
+        $script:AutoGroupSave = $null
+        if ($s -and $s.Tmp) { Remove-Item -LiteralPath $s.Tmp -Force -ErrorAction SilentlyContinue }
+        if ($script:SaveGroupsBox) { $script:SaveGroupsBox.Busy = $false; $script:SaveGroupsBox.Window.Close() }
+        return
+    }
+    if ($s.Tmp) { Remove-Item -LiteralPath $s.Tmp -Force -ErrorAction SilentlyContinue; $s.Tmp = '' }
     if ($Res) {
         $problem = ''
         if ($Res.ExitCode -ne 0) { $problem = "Docker can't read the changed file: $(Get-FirstLines $Res.Error 3)" }
@@ -6212,32 +6437,60 @@ function Complete-AutoGroups($Res) {
                 }
             }
         }
-        if ($problem) {
-            $f.Note.Text = 'Nothing was saved.'
-            [void][Windows.MessageBox]::Show($f.Window, "Nothing was saved. $problem`n`nThe Check window can show what to fix in the compose file.", $script:AppName, 'OK', 'Warning')
-            return
-        }
+        if ($problem) { Stop-SaveGroups 'Check' "$problem`n`nThe Check window can show what to fix in the compose file."; return }
+        Set-SaveGroupsStep 'Check' 'done'
     }
-    if ((Get-FileStamp) -ne $f.Stamp) {
-        [void][Windows.MessageBox]::Show($f.Window, 'The compose file was changed somewhere else in the meantime, so nothing was saved.', $script:AppName, 'OK', 'Warning')
-        return
-    }
+    if ((Get-FileStamp) -ne $f.Stamp) { Stop-SaveGroups 'Backup' 'The compose file was changed somewhere else in the meantime, so nothing was saved.'; return }
+    Set-SaveGroupsStep 'Backup' 'running'
+    Invoke-SaveGroupsNext { Save-AutoGroupsFile }
+}
+
+# Steps 3 to 5: backup, write, then read the file back to make sure it says what was meant.
+function Save-AutoGroupsFile {
+    $s = $script:AutoGroupSave
+    try { $s.Bak = Backup-ConfigFile $script:ComposePath }
+    catch { Stop-SaveGroups 'Backup' "Couldn't make a backup, so nothing was saved: $($_.Exception.Message)"; return }
+    Set-SaveGroupsStep 'Backup' 'done' $(if ($s.Bak) { [IO.Path]::GetFileName($s.Bak) } else { '' })
+    Set-SaveGroupsStep 'Write' 'running' "$($s.Done.Count) label(s)"
+    try { Write-TextFile $s.File }
+    catch { Stop-SaveGroups 'Write' "Saving failed: $($_.Exception.Message)"; return }
+    Set-SaveGroupsStep 'Write' 'done' "$($s.Done.Count) label(s)"
+    Set-SaveGroupsStep 'Verify' 'running'
+    $problem = ''
     try {
-        $bak = Backup-ConfigFile $script:ComposePath
-        Write-TextFile $s.File
-    } catch {
-        [void][Windows.MessageBox]::Show($f.Window, "Saving failed: $($_.Exception.Message)", $script:AppName, 'OK', 'Error')
+        $back = Read-TextFile $script:ComposePath
+        if (($back.Lines.ToArray() -join "`n") -cne ($s.File.Lines.ToArray() -join "`n")) { $problem = "The saved file doesn't read back the same as what was written." }
+    } catch { $problem = "Couldn't read the saved file back: $($_.Exception.Message)" }
+    if ($problem) {
+        # Put the original back from the backup, so the file is as it was.
+        $restored = $false
+        if ($s.Bak) { try { Copy-Item -LiteralPath $s.Bak -Destination $script:ComposePath -Force; $restored = $true } catch { Write-Verbose 'Restore failed.' } }
+        $problem += if ($restored) { ' The original was put back from the backup.' } else { " Put the backup back by hand: $($s.Bak)" }
+        Stop-SaveGroups 'Verify' $problem
         return
     }
+    Set-SaveGroupsStep 'Verify' 'done'
     Write-Activity ("Group automatically: added {0} to {1} service(s): {2}." -f $s.Label, $s.Done.Count, ($s.Done -join ', '))
-    if ($bak) { Write-Activity "Backup: $bak" }
+    if ($s.Bak) { Write-Activity "Backup: $($s.Bak)" }
     $script:FileStamp = Get-FileStamp
+    Set-SaveGroupsStep 'Reload' 'running'
+    Invoke-SaveGroupsNext { Complete-SaveGroups }
+}
+
+# Step 6, then close the box and say how it went.
+function Complete-SaveGroups {
+    $s = $script:AutoGroupSave
+    $f = $script:AutoGroupForm
+    $script:AutoGroupSave = $null
     Request-ConfigLoad
+    Set-SaveGroupsStep 'Reload' 'done'
+    if ($script:SaveGroupsBox) { $script:SaveGroupsBox.Busy = $false; $script:SaveGroupsBox.Window.Close() }
+    Show-Finished @(@{ Label = "Save groups: $($s.Label) added to $($s.Done.Count) container(s)"; Failed = $false; Cancelled = $false; Error = '' })
     $msg = "Added a group to $($s.Done.Count) container(s)."
     if ($s.Skipped.Count) { $msg += "`n`nLeft as they were:`n" + ($s.Skipped -join "`n") }
     $msg += "`n`nThey show Changed until you press Apply changes, which recreates them. Their data is kept."
     if (Get-Machine) { $msg += " They run on $(Get-MachineName), so press Send first." }
-    $f.Window.Close()
+    if ($f) { $f.Window.Close() }
     [void][Windows.MessageBox]::Show($window, $msg, 'Group automatically', 'OK', 'Information')
 }
 
@@ -6625,7 +6878,7 @@ $script:HelpTopics = [ordered]@{
     'Group automatically' = @(
         'When some containers have no group, the bar above the list shows Group automatically. It suggests a group for each one from its image name, reusing the groups already in your file.',
         '- Change any group, type a new one, or clear it to leave that container ungrouped.',
-        '- Save groups adds one label line to each of them (after a backup) and changes nothing else.',
+        '- Save groups adds one label line to each of them (after a backup) and changes nothing else. A Saving groups box shows each step; if one fails, the file is left as it was.',
         '- The containers then show Changed until you press Apply changes. On another machine, press Send first.'
     )
     'Portainer' = @(
@@ -6851,6 +7104,12 @@ $ui.BtnBrowse.Add_Click({ Select-ComposeFile })
 $ui.CmbRecent.Add_SelectionChanged({
         if ($script:UpdatingRecent) { return }
         $item = $ui.CmbRecent.SelectedItem
+        if ($item -and $item.Tag -eq $script:OtherComposeTag) {
+            # Once the list has closed: back to the current file (nothing is saved or
+            # reloaded), then the picker. Cancel leaves the current file selected.
+            [void]$window.Dispatcher.BeginInvoke([Action] { Update-RecentList; Select-ComposeFile }, [Windows.Threading.DispatcherPriority]::Background)
+            return
+        }
         if ($item -and $item.Tag -and $item.Tag -ne $script:ComposePath) {
             if (Test-Path -LiteralPath $item.Tag) { Set-ComposeFile $item.Tag }
             else {

@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.09] - 2026-11-13
+
+### Changed
+- **Compose file** list in the header: the last entry, **Other compose file...**, opens the same picker as the **Compose file...**
+  button (cancel goes back to the file you had). Right-click any other entry for **Remove from list**, which only takes it off the
+  list in settings.json and never touches the file. The current file is shown in bold.
+- **Settings**: the editor **Check** no longer only looks in the two usual VS Code folders. It also uses where Windows says VS Code
+  and Notepad++ are installed (App Paths, the installed programs list) and VS Code's `code` command on the PATH.
+
+### Added
+- **Settings**: under the editor **Check** result, **Choose another editor...** opens a file picker for any program, wherever it is.
+  **Browse...** and the link both start in the folder of the current or suggested editor.
+- **Group automatically**: **Save groups** opens a small **Saving groups** box with a progress bar and a line for each step:
+  adding the group labels (n of N), checking a test copy with Docker, making the backup, writing the compose file, reading it back
+  to check it, and reloading the list. The app keeps responding while it works. When it's done the box closes and the Finished box
+  says so. If a step fails, the box says why, with a **Close** button, and the compose file is left as it was (if the saved file
+  doesn't read back right, the original is put back from the backup).
+
 ## [1.08] - 2026-11-13
 
 ### Added

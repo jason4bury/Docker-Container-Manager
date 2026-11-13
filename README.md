@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.08-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.09-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -55,7 +55,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-**Exe:** download `Docker Container Manager v1.08.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
+**Exe:** download `Docker Container Manager v1.09.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
 
 **Script:** clone this repo and run `Start Docker Container Manager.cmd`. It starts `src\Docker-Container-Manager.ps1` with the execution policy bypassed for that run only.
 
@@ -71,7 +71,7 @@ E:\Created\_shared\Build-Tool.ps1 -Project "E:\Created\Home\Docker-Container-Man
 
 ## 🚀 Usage
 
-1. Start the app and press **Compose file...** to pick your `docker-compose.yml`. Next time it opens the same file; the list at the top switches between files you've used.
+1. Start the app and press **Compose file...** to pick your `docker-compose.yml`. Next time it opens the same file; the list at the top switches between files you've used. Its last entry, **Other compose file...**, picks another one, and right-clicking an entry offers **Remove from list** (the file itself is never touched).
 2. Pick a group on the left, or **All containers**.
 3. Select one or more containers (Ctrl+click, Shift+click or Ctrl+A) and press **Start**, **Stop**, **Restart**, **Update** or **Logs**, or right-click for **Recreate**, **Copy name** and **Remove container...**.
 4. Use **Start group**, **Stop group** and **Update group** in the bar above the list for the whole group. With **All containers** picked they act on everything, after asking.
@@ -140,13 +140,16 @@ Change any group, type a new one, or clear it to leave that service ungrouped, t
 
 1. adds one `home.group` line to each of those services (in the same list or map style as the rest of the file, adding `labels:` where a service has none) and changes nothing else,
 2. has Docker read a test copy first to make sure each service gets exactly that group,
-3. backs up the compose file to `%APPDATA%\Docker Container Manager\Backups` and saves it.
+3. backs up the compose file to `%APPDATA%\Docker Container Manager\Backups` and saves it,
+4. reads the saved file back to check it, and reloads the list.
+
+A small **Saving groups** box shows each step as it happens, with a progress bar. If a step fails, it says why and the compose file is left as it was; when everything worked it closes and the Finished box says so.
 
 Services that already have a group are never touched. The grouped services show **Changed** until you press **Apply changes**; with another machine picked, press **Send** first.
 
 ### Settings
 
-**Settings** in the header sets the label prefix, how often the status is checked (15 seconds by default, 30 when the window is in the tray), the editor for **Edit** and **.env** (Visual Studio Code at `C:\Program Files\Microsoft VS Code\code.exe` by default, Notepad when it's empty or not found; **Check** beside it says whether the program is there and offers Visual Studio Code, Notepad++ or Notepad when it isn't; `%VARIABLES%` such as `%LOCALAPPDATA%` work in the path), whether Update removes unused images, whether stopping a group asks first, whether minimising hides the window in the tray instead of the taskbar (off by default), the theme (System, Light or Dark), whether app icons are shown, whether to check for newer images when the app starts, whether to show the progress window, and whether to show a Finished box when the progress window was hidden.
+**Settings** in the header sets the label prefix, how often the status is checked (15 seconds by default, 30 when the window is in the tray), the editor for **Edit** and **.env** (Visual Studio Code at `C:\Program Files\Microsoft VS Code\code.exe` by default, Notepad when it's empty or not found; **Check** beside it says whether the program is there and offers Visual Studio Code, Notepad++ or Notepad when it isn't, looking wherever Windows says they're installed, and **Choose another editor...** picks any other program; `%VARIABLES%` such as `%LOCALAPPDATA%` work in the path), whether Update removes unused images, whether stopping a group asks first, whether minimising hides the window in the tray instead of the taskbar (off by default), the theme (System, Light or Dark), whether app icons are shown, whether to check for newer images when the app starts, whether to show the progress window, and whether to show a Finished box when the progress window was hidden.
 
 Downloaded icons are kept in `%LOCALAPPDATA%\Docker Container Manager\Icons` and the last update check in `%APPDATA%\Docker Container Manager\updates.json`. Icon downloads send only the icon name (for example `sonarr.png`) to the jsDelivr CDN; turn icons off in Settings if you'd rather not.
 
