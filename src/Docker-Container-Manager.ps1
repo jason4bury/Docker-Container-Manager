@@ -29,10 +29,10 @@
     Opens the window with the last compose file used.
 
 .EXAMPLE
-    "Docker Container Manager v1.10.exe" -ComposeFile "D:\Docker\docker-compose.yml"
+    "Docker Container Manager v1.11.exe" -ComposeFile "D:\Docker\docker-compose.yml"
 
 .NOTES
-    Version:   1.10 (keep in step with CHANGELOG.md)
+    Version:   1.11 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -44,7 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.10'
+$script:AppVersion = '1.11'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 
 #region BUNDLE-ASSETS
@@ -5579,6 +5579,9 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.11' = @(
+        'Help and README updated for the newer features: the compose file list, Disk clean-up buttons, My groups, the editor Check and the About sections.'
+    )
     '1.10' = @(
         'My groups: your own list of which group each container goes in, kept on this PC and ready from the start (the built-in list, or the first compose file loaded). Group automatically uses it first and only guesses the rest (the From column says which), and can add what you save to it.',
         'My groups window (from Group automatically or Settings): sort, filter, add, change and remove rows, fill it from the current compose file''s labels, reset it to the built-in list, open it in your editor. A backup is kept on each save.'
@@ -7284,7 +7287,8 @@ $script:HelpTopics = [ordered]@{
         '## Containers on',
         'Which computer''s Docker the app shows and controls: This PC, or another machine (a Linux laptop, a VM, a Synology NAS) reached over SSH. Machines... in this list adds or changes them.',
         '## Compose file',
-        'The compose file on this PC that the app reads. Each machine remembers the file you last used with it.',
+        'The compose file on this PC that the app reads (the one in bold). Each machine remembers the file you last used with it.',
+        'Other compose file... at the end of the list picks a file anywhere on this PC (like the Compose file... button). Right-click any other entry for Remove from list; the file itself is never touched.',
         'With another machine picked, the box reads Send from: that machine runs its own copy of the file, and the file here is the master copy. Send copies it across.'
     )
     'Groups and labels' = @(
@@ -7344,7 +7348,7 @@ $script:HelpTopics = [ordered]@{
     )
     'Check, Disk and updates' = @(
         '- Check finds mistakes in the compose file: spacing, ${...} variables, ports used twice, missing folders and more. Double-click a result to open the file at that line. Tidy spacing fixes the indents, and only saves when Docker reads the file the same.',
-        '- Disk shows how much space images, containers, volumes and the build cache use, with buttons to clear what isn''t needed.',
+        '- Disk shows how much space images, containers, volumes and the build cache use. Each card has a small clean-up button next to the space it frees (red for unused volumes, which deletes their data and asks twice). A button is off when there''s nothing to free, and its tooltip shows the exact docker command.',
         '- Check for updates asks each image''s registry whether a newer image is out, without downloading anything. Containers with one show a note, and the Updates available filter lists them.'
     )
     'Group automatically' = @(
@@ -7352,6 +7356,7 @@ $script:HelpTopics = [ordered]@{
         '- Change any group, type a new one, or clear it to leave that container ungrouped.',
         '- Save groups adds one label line to each of them (after a backup) and changes nothing else. A Saving groups box shows each step; if one fails, the file is left as it was.',
         '- My groups (in Group automatically and Settings) is your own list of which group each container goes in, kept on this PC as my-groups.txt. Group automatically uses it first and only guesses the rest; the From column says which. Update from current compose file fills it from the labels you already have.',
+        '- The list is ready from the start: the app makes it from the built-in list (or, without one, from the first compose file it loads). Reset to built-in list in the My groups window goes back to it, after asking and a backup. Also add the new groups to My groups (in Group automatically) adds what you save.',
         '- The containers then show Changed until you press Apply changes. On another machine, press Send first.'
     )
     'Portainer' = @(
@@ -7388,9 +7393,11 @@ $script:HelpTopics = [ordered]@{
         '- Ctrl+A: select everything; Esc: clear the search'
     )
     'Settings and files' = @(
-        'Settings sets the label prefix, how often the status is checked, the editor (Check says whether it''s there and suggests one if not), the theme, the tray, app icons, update checks, the progress window and the Finished box.',
+        'Settings sets the label prefix, how often the status is checked, the editor (Check says whether it''s there and suggests VS Code, Notepad++ or Notepad wherever they''re installed; Choose another editor... picks any program), the theme, the tray, app icons, update checks, the progress window and the Finished box.',
         '- Settings (settings.json), your source links (source-links.txt), My groups (my-groups.txt, with my-groups.bak.txt from the save before) and backups of the compose file and .env (Backups) are in %APPDATA%\Docker Container Manager.',
         '- Downloaded icons are in %LOCALAPPDATA%\Docker Container Manager\Icons.',
+        '- Edit source links... and My groups... are links in Settings too.',
+        '- About (in the header) shows the version, what''s new in each version in sections that open and close (the newest open), this PC''s Docker and Compose versions, and the keys.',
         'Nothing is installed: delete that folder to start again.'
     )
 }

@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.10-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.11-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -14,7 +14,7 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 
 - **Every service at a glance**: live state (running, healthy, unhealthy, stopped, exited with an error, not created), how long it's been up, its web page, its image and a note when something needs doing. The list refreshes every few seconds.
 - **Groups that live in the compose file.** Add a `home.group` label to a service and it's listed under that group, with running/total counts and a red dot when something in the group has a problem. The labels travel with the file, so every machine you copy it to shows the same groups.
-- **Group automatically**: suggests a group for every service that has none, from its image name (sonarr and radarr under Downloads, postgres under Databases, and so on), reusing the groups already in the file. You check and change the list before anything is saved.
+- **Group automatically**: suggests a group for every service that has none, from its image name (sonarr and radarr under Downloads, postgres under Databases, and so on), reusing the groups already in the file, and your own **My groups** list first. You check and change the list before anything is saved, and a **Saving groups** box shows each step of the save.
 - **Start, Stop, Restart, Update and Recreate** for one container, a selection, a whole group or everything. Update pulls the newest images and recreates what changed, keeps stopped containers stopped, and can tidy away unused images afterwards.
 - **Keeps up with the compose file.** Save the file (or `.env`) and it's read again straight away:
   - new services appear,
@@ -34,8 +34,10 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **Tidy spacing**: re-indents the compose file to two spaces per level, and only saves it when Docker reads the result exactly the same as before.
 - **List or cards**, **dark mode**, **app icons** and a **colour for each group**.
 - **Source page**: right-click a container (or press **Source**) to open its project page on GitHub, GitLab or Docker Hub, from a label, your own list of links, the image itself or a guess from its name.
-- **Export**: saves the list as one web page (HTML) to keep, print or send.
+- **My groups**: your own list of which group each container goes in, kept on your PC and ready from the start, so a new compose file gets the groups you always use.
+- **Export**: saves the list as one web page (HTML) to keep, print or send, in light or dark with a switch at the top.
 - **Help** (F1): a guide to every part of the app inside it.
+- **About**: the version, what's new in each version (in sections that open and close), this PC's Docker and Compose versions and the keys.
 - **Portainer**: one button opens Portainer on the chosen machine, starts it when it's stopped, or installs it after showing the `docker run` line.
 - **Other machines**: manage the same compose file on a Linux laptop, a VM or a Synology NAS over SSH, from the machine list at the top. **Send** copies the compose file and that machine's `Env_` file (as `.env`) across.
 - Only changes the compose file or `.env` when you save in a Configure window, tidy the spacing or save groups, and backs both up first. Nothing is installed; settings are in `%APPDATA%`. The exe is self-contained.
@@ -55,7 +57,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-**Exe:** download `Docker Container Manager v1.10.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
+**Exe:** download `Docker Container Manager v1.11.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
 
 **Script:** clone this repo and run `Start Docker Container Manager.cmd`. It starts `src\Docker-Container-Manager.ps1` with the execution policy bypassed for that run only.
 
@@ -74,7 +76,7 @@ E:\Created\_shared\Build-Tool.ps1 -Project "E:\Created\Home\Docker-Container-Man
 1. Start the app and press **Compose file...** to pick your `docker-compose.yml`. Next time it opens the same file; the list at the top switches between files you've used. Its last entry, **Other compose file...**, picks another one, and right-clicking an entry offers **Remove from list** (the file itself is never touched).
 2. Pick a group on the left, or **All containers**.
 3. Select one or more containers (Ctrl+click, Shift+click or Ctrl+A) and press **Start**, **Stop**, **Restart**, **Update** or **Logs**, or right-click for **Recreate**, **Copy name** and **Remove container...**.
-4. Use **Start group**, **Stop group** and **Update group** in the bar above the list for the whole group. With **All containers** picked they act on everything, after asking.
+4. Use **Start all**, **Stop all** and **Update all** in the bar above the list for the whole group. With **All containers** picked they act on everything, after asking.
 5. Press **Edit** to change the compose file. When you save, the list updates, and anything that needs recreating shows **Apply changes**.
 
 To try it without your own containers, open `docs\demo\docker-compose.yml` and press **Start all**. `docker compose down` in that folder removes the demo again.
@@ -214,7 +216,7 @@ The name (or the project name in a GitHub or GitLab address) is matched to the i
 
 ### Help
 
-**Help** in the header (or F1) opens a guide inside the app: the lists at the top, groups and labels, the list and cards, the right-click menu, Configure, Check, Disk, Logs, other machines, Group automatically, Portainer, source pages, export, the keys and where the files are kept. The text can be selected and copied.
+**Help** in the header (or F1) opens a guide inside the app: the lists at the top, groups and labels, the list and cards, the right-click menu, Configure, Check, Disk, Logs, other machines, Group automatically and My groups, Portainer, source pages, export, the keys and where the files are kept. The text can be selected and copied.
 
 ### Portainer
 

@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.11] - 2026-11-14
+
+### Changed
+- **Help** (F1) covers the newer features: **Other compose file...** and **Remove from list**, the Disk usage clean-up buttons,
+  My groups (the built-in list, **Reset to built-in list** and adding new groups), the editor **Check** and **Choose another editor...**,
+  and the About sections.
+- **README**: My groups and About in the features list, the Export light / dark switch, and the Usage step now names
+  **Start all**, **Stop all** and **Update all** (they were still called Start group, Stop group and Update group).
+
 ## [1.10] - 2026-11-13
 
 ### Added
