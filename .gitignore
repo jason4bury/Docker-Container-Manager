@@ -1,5 +1,11 @@
-# Builds live in ..\Builds\, outside the repo. Safety net in case one lands here.
+# Builds live in ..\Builds\, outside the repo. Safety net in case one lands here:
+# release folders, zips, and the shortcuts the shortcut maker makes (full paths, this PC only).
+Builds/
+Docker Container Manager v*/
+*.zip
+*.lnk
 *.exe
+*.exe.old
 *.bundle.ps1
 
 # Local config, logs and temp files (settings live in %APPDATA%\Docker Container Manager)
@@ -10,6 +16,7 @@ my-groups.bak.txt
 source-links.txt
 *.log
 *.tmp
+*.bak
 
 # Compose secrets, in case a real compose project is copied in for testing
 .env
@@ -17,6 +24,7 @@ source-links.txt
 # Windows clutter
 Thumbs.db
 desktop.ini
+$RECYCLE.BIN/
 
 # Editor
 .vscode/

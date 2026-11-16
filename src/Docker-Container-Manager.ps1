@@ -29,13 +29,17 @@
     Opens the window with the last compose file used.
 
 .EXAMPLE
-    "Docker Container Manager v1.11.exe" -ComposeFile "D:\Docker\docker-compose.yml"
+    powershell -STA -ExecutionPolicy Bypass -File .\Docker-Container-Manager.ps1 -ComposeFile "D:\Docker\docker-compose.yml"
+    Opens that compose file.
 
 .NOTES
-    Version:   1.11 (keep in step with CHANGELOG.md)
+    Version:   1.12 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
+    Layout:    from the repo the script is in Source\src\, with assets\ and my-groups.txt in Source\.
+               In a release folder (Builds\Docker Container Manager v<version>\) they sit beside the script.
+               There is no exe: "Docker Container Manager.cmd" makes a shortcut that starts this script.
 #>
 param(
     [string]$ComposeFile
@@ -44,16 +48,14 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.11'
+$script:AppVersion = '1.12'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
+$script:AppId      = 'jason4bury.Docker-Container-Manager'   # taskbar ID, the same as the shortcut's
 
-#region BUNDLE-ASSETS
-# Build-Exe.cmd replaces this region with the icon and logo as base64, so the exe
-# needs no other files. Running from source, they are read from ..\assets\.
-# If Source\my-groups.txt is there when the exe is built, it's put in too as the
-# built-in My groups list.
-$script:EmbeddedAssets = @{}
-#endregion BUNDLE-ASSETS
+# Where the icon, logo and built-in my-groups.txt are. In a release folder they sit beside
+# this script (assets\ and my-groups.txt); in the repo the script is in src\ and they're one up.
+$script:ProgramDir = if ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { (Get-Location).Path }
+$script:AppDirs    = @($script:ProgramDir, (Split-Path -Parent $script:ProgramDir)) | Where-Object { $_ }
 
 # ---------------------------------------------------------------------------
 # WPF needs an STA thread. Started any other way, restart in Windows PowerShell.
@@ -68,6 +70,12 @@ if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA' -and $PSComm
 
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+
+# One taskbar button with the app's own icon (not PowerShell's), and pinning it pins the app.
+try {
+    Add-Type -Namespace 'Dcm' -Name 'Shell' -MemberDefinition '[DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string appId);'
+    [void][Dcm.Shell]::SetCurrentProcessExplicitAppUserModelID($script:AppId)
+} catch { Write-Verbose "No taskbar ID: $($_.Exception.Message)" }
 
 # ---------------------------------------------------------------------------
 # Helper classes (C# 5, so they compile with the .NET Framework compiler that
@@ -472,11 +480,12 @@ $script:SaveGroupsNext = $null
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
-function Get-AssetBytes([string]$Name) {
-    if ($script:EmbeddedAssets.ContainsKey($Name)) { return [Convert]::FromBase64String($script:EmbeddedAssets[$Name]) }
-    if ($PSScriptRoot) {
-        $p = Join-Path (Split-Path -Parent $PSScriptRoot) "assets\$Name"
-        if (Test-Path -LiteralPath $p) { return [IO.File]::ReadAllBytes($p) }
+# A file the app ships with: assets\<Name> (icon, logo) or, with -Top, <Name> itself
+# (my-groups.txt), beside the script in a release folder or one up in the repo.
+function Get-AssetBytes([string]$Name, [switch]$Top) {
+    foreach ($dir in $script:AppDirs) {
+        $p = if ($Top) { Join-Path $dir $Name } else { Join-Path $dir "assets\$Name" }
+        if (Test-Path -LiteralPath $p -PathType Leaf) { return [IO.File]::ReadAllBytes($p) }
     }
     return $null
 }
@@ -498,7 +507,7 @@ function Get-TrayIcon {
     if ($bytes) {
         try { return New-Object Drawing.Icon((New-Object IO.MemoryStream(, $bytes)), 16, 16) } catch { Write-Verbose 'Icon bytes unreadable.' }
     }
-    try { return [Drawing.Icon]::ExtractAssociatedIcon([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) } catch { return [Drawing.SystemIcons]::Application }
+    return [Drawing.SystemIcons]::Application
 }
 
 function Find-Docker {
@@ -5579,6 +5588,11 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.12' = @(
+        'No exe any more: antivirus programs kept flagging the PS2EXE exe as a trojan by mistake. The release is now the script itself, with Docker Container Manager.cmd, which makes a shortcut here and in the Start menu and starts the app with no console window.',
+        'The taskbar button has the app''s own icon, and pinning it pins Docker Container Manager (not PowerShell).',
+        'The built-in My groups list ships beside the script as my-groups.txt.'
+    )
     '1.11' = @(
         'Help and README updated for the newer features: the compose file list, Disk clean-up buttons, My groups, the editor Check and the About sections.'
     )
@@ -6646,15 +6660,10 @@ function Get-ComposeGroups {
     return $map
 }
 
-# The My groups list built into the exe (Source\my-groups.txt when it was built), or,
-# running from source, Source\my-groups.txt itself. $null when there's none.
+# The built-in My groups list: the my-groups.txt that ships beside the script in a release
+# folder, or Source\my-groups.txt running from the repo. $null when there's none.
 function Get-BuiltInMyGroups {
-    if ($script:EmbeddedAssets.ContainsKey('my-groups.txt')) { return [Convert]::FromBase64String($script:EmbeddedAssets['my-groups.txt']) }
-    if ($PSScriptRoot) {
-        $p = Join-Path (Split-Path -Parent $PSScriptRoot) 'my-groups.txt'
-        if (Test-Path -LiteralPath $p -PathType Leaf) { return [IO.File]::ReadAllBytes($p) }
-    }
-    return $null
+    return Get-AssetBytes 'my-groups.txt' -Top
 }
 
 # How many containers a my-groups.txt (as bytes) lists.
@@ -7554,6 +7563,13 @@ $ui.ChkActivity.IsChecked = [bool]$script:Settings.ShowActivity
 
 $logo = Get-ImageSource 'Docker-Container-Manager.png'
 if ($logo) { $ui.ImgLogo.Source = $logo; $window.Icon = $logo }
+# Window and taskbar icon from the .ico: a BitmapFrame keeps every size in it, so Windows picks
+# the right one. (The logo above stays as the fallback.)
+$icoBytes = Get-AssetBytes 'Docker-Container-Manager.ico'
+if ($icoBytes) {
+    try { $window.Icon = [Windows.Media.Imaging.BitmapFrame]::Create((New-Object IO.MemoryStream (, $icoBytes)), 'None', 'OnLoad') }
+    catch { Write-Verbose "Icon unreadable: $($_.Exception.Message)" }
+}
 
 # The Activity log's height, as last left by the splitter (kept within sensible bounds).
 function Get-LogHeight {

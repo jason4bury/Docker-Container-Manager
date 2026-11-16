@@ -1,6 +1,6 @@
-# PSScriptAnalyzer settings for Docker-Container-Manager.ps1.
-# Build-Exe.cmd runs it. To run it by hand:
-#   Invoke-ScriptAnalyzer -Path .\src\Docker-Container-Manager.ps1 -Settings .\PSScriptAnalyzerSettings.psd1
+# PSScriptAnalyzer settings for the scripts in src\.
+# Build.cmd runs it. To run it by hand:
+#   Invoke-ScriptAnalyzer -Path .\src -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
 @{
     Severity     = @('Error', 'Warning')
     ExcludeRules = @(

@@ -2,9 +2,25 @@
 
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with versions numbered
-`<major>.<minor>` and a two-digit minor (v1.00, v1.01 ... v1.10) to match the exe file names.
+`<major>.<minor>` and a two-digit minor (v1.00, v1.01 ... v1.10) to match the release names.
 
 ## [Unreleased]
+
+## [1.12] - 2026-11-16
+
+### Changed
+- **No exe any more.** Antivirus programs (ESET among them) kept flagging the PS2EXE exe as a generic trojan by mistake,
+  so the release is now the script itself: `Docker-Container-Manager-v1.12.zip` holds `Docker-Container-Manager.ps1`, its icon and logo,
+  the built-in `my-groups.txt` and **Docker Container Manager.cmd**. Double-click the .cmd: it makes a **Docker Container Manager**
+  shortcut in the folder and in the Start menu and starts the app, with no console window.
+- The taskbar button shows the app's own icon (not PowerShell's), and pinning it pins Docker Container Manager.
+- The icon, logo and built-in My groups list are read from beside the script (release folder) or from the repo, instead of
+  being pasted into the exe. Nothing else changes: settings, My groups and backups stay in `%APPDATA%\Docker Container Manager`.
+- **Build.cmd** replaces `Build-Exe.cmd`: it makes `Builds\Docker Container Manager v<version>\`, its zip and
+  `Builds\Docker Container Manager.lnk` for the Home Launcher, runs the shortcut maker the way the .cmd does (so a broken .cmd
+  fails the build) and scans the result with ESET's command-line scanner if it's installed.
+- `Start Docker Container Manager.cmd` (from the repo) has a `debug` option that keeps a console open to show errors.
+- build.json's description matches the GitHub About text.
 
 ## [1.11] - 2026-11-14
 

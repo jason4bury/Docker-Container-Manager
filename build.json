@@ -3,11 +3,20 @@
   "EntryScript": "src\\Docker-Container-Manager.ps1",
   "Icon": "assets\\Docker-Container-Manager.ico",
   "Side": "Home",
-  "Description": "PowerShell/WPF tool for running and organising Docker Compose containers",
-  "EmbedAssets": ["assets\\Docker-Container-Manager.ico", "assets\\Docker-Container-Manager.png"],
-  "IncludeFiles": [],
-  "Ps2exe": {
-    "STA": true,
-    "NoConsole": true
+  "Description": "PowerShell/WPF tool for running and organising Docker Compose containers in groups, on this PC or over SSH",
+  "RequireAdmin": false,
+  "Release": {
+    "Files": {
+      "Docker-Container-Manager.ps1": "src\\Docker-Container-Manager.ps1",
+      "New-DockerContainerManagerShortcut.ps1": "src\\New-DockerContainerManagerShortcut.ps1",
+      "Docker Container Manager.cmd": "release\\Docker Container Manager.cmd",
+      "assets\\Docker-Container-Manager.ico": "assets\\Docker-Container-Manager.ico",
+      "assets\\Docker-Container-Manager.png": "assets\\Docker-Container-Manager.png",
+      "my-groups.txt": "my-groups.txt",
+      "README.md": "README.md",
+      "CHANGELOG.md": "CHANGELOG.md",
+      "LICENSE": "LICENSE"
+    },
+    "Shortcut": "New-DockerContainerManagerShortcut.ps1"
   }
 }

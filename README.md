@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.11-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.12-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -40,7 +40,7 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **About**: the version, what's new in each version (in sections that open and close), this PC's Docker and Compose versions and the keys.
 - **Portainer**: one button opens Portainer on the chosen machine, starts it when it's stopped, or installs it after showing the `docker run` line.
 - **Other machines**: manage the same compose file on a Linux laptop, a VM or a Synology NAS over SSH, from the machine list at the top. **Send** copies the compose file and that machine's `Env_` file (as `.env`) across.
-- Only changes the compose file or `.env` when you save in a Configure window, tidy the spacing or save groups, and backs both up first. Nothing is installed; settings are in `%APPDATA%`. The exe is self-contained.
+- Only changes the compose file or `.env` when you save in a Configure window, tidy the spacing or save groups, and backs both up first. Nothing is installed; settings are in `%APPDATA%`. There is no exe: it runs as a PowerShell script from a shortcut.
 
 ## 🖼️ Screenshots
 
@@ -57,19 +57,22 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-**Exe:** download `Docker Container Manager v1.11.exe` from the [latest release](../../releases/latest) and run it. Put it in `Home\Docker-Container-Manager\Builds\` and the Home Launcher lists it under Windows.
+1. Download `Docker-Container-Manager-v1.12.zip` from the [latest release](../../releases/latest) and unzip it wherever you like to keep it.
+2. Double-click **Docker Container Manager.cmd** in the unzipped folder. It makes a **Docker Container Manager** shortcut there and in the Start menu, and starts the app. From then on, use the shortcut, the Start menu or a pinned taskbar button.
 
-**Script:** clone this repo and run `Start Docker Container Manager.cmd`. It starts `src\Docker-Container-Manager.ps1` with the execution policy bypassed for that run only.
+Nothing is installed and no Windows settings are changed. The shortcut runs the script with PowerShell's execution policy bypassed for that run only. If the app doesn't open, run `"Docker Container Manager.cmd" debug` from a command prompt to start it in that window and see any errors.
 
-### Build the exe
+**From the repo:** clone it and double-click **Start Docker Container Manager.cmd**. It starts `src\Docker-Container-Manager.ps1` the same way.
 
-Double-click `Build-Exe.cmd`. It checks the version in the script matches the newest CHANGELOG entry, runs PSScriptAnalyzer (if installed), pastes the icon and logo into the script and compiles it with [ps2exe](https://github.com/MScholtes/PS2EXE) (`-STA -noConsole`). The result is saved to the project's `Builds\` folder, outside the repo, as `Docker Container Manager v<version>.exe`. It installs ps2exe for your user the first time and logs to `Build-Exe.log`.
+In the Home Launcher, the app is listed under Windows once `Build.cmd` has made `Builds\Docker Container Manager.lnk`.
 
-The exe is not signed by this script. Once `E:\Created\_shared\Build-Tool.ps1` is in place it replaces `Build-Exe.cmd` and signs the exe:
+### Why no exe
 
-```powershell
-E:\Created\_shared\Build-Tool.ps1 -Project "E:\Created\Home\Docker-Container-Manager"
-```
+Up to v1.11 the app shipped as a PS2EXE exe, and antivirus programs (ESET among them) kept flagging those exes as generic trojans by mistake. A plain script and a shortcut give the same one-click start without the false alarms, and you can read exactly what runs.
+
+### Build a release
+
+Double-click **Build.cmd** in the repo folder. It reads `build.json`, checks every script for syntax errors and that `$script:AppVersion` matches the newest `CHANGELOG.md` entry, runs PSScriptAnalyzer if it's installed, copies the release files (including the built-in `my-groups.txt`) into `..\Builds\Docker Container Manager v<version>\`, zips that folder for the GitHub release, refreshes `..\Builds\Docker Container Manager.lnk` (what the Home Launcher starts, made the same way the release's .cmd makes its shortcut, so a broken .cmd fails the build) and scans the result with ESET's command-line scanner if it's installed. It logs to `Build.log`.
 
 ## 🚀 Usage
 
@@ -153,7 +156,7 @@ Services that already have a group are never touched. The grouped services show 
 
 If you use the same containers in more than one compose file, keep your own list of which group each one goes in. **My groups...** (in Group automatically, or the link in Settings) opens it: a sortable list of containers and groups that you can filter, add to, change and remove from. **Update from current compose file** reads the group labels in the compose file that's open (without changing it), adds the containers that aren't in the list and asks before changing any group that's already there. **Open in editor** and **Open folder** show the file itself.
 
-Group automatically uses My groups first and only guesses the containers that aren't in it; the **From** column says which. **Also add the new groups to My groups** (ticked to start with) adds the groups you save there that aren't in the list yet, so next time they're used first. You don't have to make the list yourself. The build can include your own groups list: the `my-groups.txt` next to `Build-Exe.cmd` is put into the exe (edit it, or remove it for an exe without a built-in list). On a PC with no list yet, the app starts with that built-in list; without one, it makes the list from the group labels of the first compose file it loads. The Activity log says which, and an existing list is never replaced. **Reset to built-in list...** in the My groups window goes back to the built-in list (it asks first and keeps a backup).
+Group automatically uses My groups first and only guesses the containers that aren't in it; the **From** column says which. **Also add the new groups to My groups** (ticked to start with) adds the groups you save there that aren't in the list yet, so next time they're used first. You don't have to make the list yourself. The release can include your own groups list: the `my-groups.txt` in the repo folder ships beside the script (edit it, or take it out of `build.json` for a release without a built-in list). On a PC with no list yet, the app starts with that built-in list; without one, it makes the list from the group labels of the first compose file it loads. The Activity log says which, and an existing list is never replaced. **Reset to built-in list...** in the My groups window goes back to the built-in list (it asks first and keeps a backup).
 
 The list is a text file, `%APPDATA%\Docker Container Manager\my-groups.txt`, one `service | Group` per line (lines starting with `#` are ignored, and capitals and spaces around the `|` don't matter). It stays on your PC and is never sent anywhere. The list from before each save is kept as `my-groups.bak.txt`.
 
@@ -165,7 +168,7 @@ Downloaded icons are kept in `%LOCALAPPDATA%\Docker Container Manager\Icons` and
 
 They are saved in `%APPDATA%\Docker Container Manager\settings.json`, together with the compose file in use, the recent files list and the window size. Delete the file to start again.
 
-Start the exe (or the script) with `-ComposeFile "<path>"` to open a particular compose file.
+Start the script with `-ComposeFile "<path>"` (for example `"Start Docker Container Manager.cmd" -ComposeFile "D:\Docker\docker-compose.yml"`) to open a particular compose file.
 
 ### Other machines
 
