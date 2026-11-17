@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.13] - 2026-11-17
+
+### Added
+- **Missing .env values** on other machines. Before the app reads a machine's compose file (when you pick the machine,
+  change compose file, or after **Send**), it reads that compose file and its `.env` over SSH and lists every `${NAME}` the
+  compose file uses that the `.env` doesn't set (variables with a default, such as `${NAME:-x}`, and ones set in the
+  machine's own shell don't count). For example `MP3_ARTIST_PICS` on a machine whose `.env` was written before the music apps used it.
+- A **Missing .env values** window opens with one box per variable, the line it's used on and the value this PC uses
+  (marked when it's a Windows path). **Add to .env on <machine>** backs up that machine's `.env` as a dated `.bak`, then adds
+  only the new `NAME=value` lines to its end: nothing already in it changes, a name that's there by then is left alone,
+  and this PC's `.env` is never sent. It asks first if a value looks like a Windows path.
+- When the machine's `.env` comes from an `Env_` file, its values are filled in from that file, and **Also add them to
+  Env_... on this PC** (on by default) adds them there too (after a backup), so the next **Send** keeps them.
+- A yellow bar names the missing variables until they're set; **Add values...** opens the window again. The window only
+  opens by itself when a new name turns up, so **Not now** isn't asked again.
+- Help (Other machines and Send), README and About > What's new describe it.
+
 ## [1.12] - 2026-11-16
 
 ### Changed

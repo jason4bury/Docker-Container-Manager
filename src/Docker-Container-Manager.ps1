@@ -33,7 +33,7 @@
     Opens that compose file.
 
 .NOTES
-    Version:   1.12 (keep in step with CHANGELOG.md)
+    Version:   1.13 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -48,7 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.12'
+$script:AppVersion = '1.13'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 $script:AppId      = 'jason4bury.Docker-Container-Manager'   # taskbar ID, the same as the shortcut's
 
@@ -443,6 +443,11 @@ $script:ConfigError    = ''
 $script:ConfigLoaded   = $false
 $script:ConfigLoading  = $false
 $script:ConfigWanted   = $false
+$script:EnvCheckWanted = $false   # check the machine's .env before its compose file is next read
+$script:EnvMissing     = $null    # @{ Machine; Names; Lines; NoEnv } from the last check
+$script:EnvShown       = @{}      # 'machine|NAME' already shown, so the window doesn't open again for them
+$script:EnvCheckForm   = $null
+$script:EnvAddPending  = $null
 $script:ConfigGen      = 0
 $script:LoadingGen     = 0
 $script:PendingConfig  = $null
@@ -1700,6 +1705,13 @@ function Update-Banner {
                 -Action @{ Text = 'Send to machine...'; Glyph = [string][char]0xE898; Click = { Invoke-SendToMachine } }
             return
         }
+        $em = $script:EnvMissing
+        if ($em -and $em.Machine -eq $m.Name -and $em.Names.Count) {
+            $names = (@($em.Names | Select-Object -First 4) -join ', ') + $(if ($em.Names.Count -gt 4) { ' and {0} more' -f ($em.Names.Count - 4) } else { '' })
+            Show-Banner -Kind warn -Text ("The compose file on $($m.Name) uses variables its .env doesn't set, so they're empty: $names.") `
+                -Action @{ Text = 'Add values...'; Glyph = [string][char]0xE710; Click = { Show-MissingEnv } }
+            return
+        }
         Hide-Banner
         return
     }
@@ -2389,6 +2401,8 @@ function Set-ComposeFile([string]$Path) {
     $script:ProjectName = ''
     $script:ConfigLoaded = $false
     $script:ConfigError = ''
+    $script:EnvCheckWanted = $true
+    $script:EnvMissing = $null
     $script:Rows.Clear()
     $script:RowIndex = @{}
     $script:FileStamp = Get-FileStamp
@@ -2426,6 +2440,14 @@ function Start-ConfigLoad {
     if (-not $script:ComposePath -or -not (Test-Path -LiteralPath $script:ComposePath) -or -not (Test-DockerReady)) { Update-Banner; Update-View; return }
     if ($script:ConfigLoading) { $script:ConfigWanted = $true; return }
     $script:ConfigLoading = $true
+    # Another machine: first list the variables its compose file uses that its .env doesn't set.
+    $envMachine = Get-Machine
+    if ($envMachine -and $script:EnvCheckWanted) {
+        $script:EnvCheckWanted = $false
+        Set-Status "Checking the .env on $($envMachine.Name)..."
+        Start-RemoteEnvCheck $envMachine
+        return
+    }
     $script:LoadingGen = $script:ConfigGen
     Set-Status 'Reading the compose file...'
     if ($script:CheckForm) { Update-CheckWindow } else { Update-CheckBadge }
@@ -5588,6 +5610,9 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.13' = @(
+        'Missing .env values: before reading another machine''s compose file, the app checks that machine''s .env for every ${NAME} the compose file uses, lists any that are missing and lets you add a value for that machine. Only new lines are added; the rest of its .env is left alone and this PC''s .env is never sent.'
+    )
     '1.12' = @(
         'No exe any more: antivirus programs kept flagging the PS2EXE exe as a trojan by mistake. The release is now the script itself, with Docker Container Manager.cmd, which makes a shortcut here and in the Start menu and starts the app with no console window.',
         'The taskbar button has the app''s own icon, and pinning it pins Docker Container Manager (not PowerShell).',
@@ -7343,6 +7368,12 @@ $script:HelpTopics = [ordered]@{
         '- Machines... sets the SSH login, the folder with the compose file, the Env_ file to send as .env, and Portainer''s data folder.',
         '- SSH key help shows the one-time setup; Test connection checks it.',
         '- Send backs up the files on the machine, then copies your compose file (and the Env_ file as .env) there. Nothing restarts; press Apply changes afterwards.',
+        '## Missing .env values',
+        'Before the app reads a machine''s compose file, it checks that machine''s .env for every ${NAME} the compose file uses. Variables with a default, such as ${NAME:-x}, don''t count.',
+        '- If some are missing, a window lists them, with the line they''re used on and the value this PC uses (if any). A yellow bar stays at the top until they''re set; Add values... opens the window again.',
+        '- Type the value that machine should use (a path as the machine sees it, such as /volume1/music) and press Add to .env. Empty boxes are skipped.',
+        '- Only new lines are added to the end of the machine''s .env, after a dated .bak copy. Nothing already in it changes, and this PC''s .env is never sent.',
+        '- When the machine gets its .env from an Env_ file, the values are filled in from that file and can be added to it too, so the next Send keeps them.',
         '## The usual routine for a NAS',
         '- Pick the NAS in Containers on.',
         '- Edit the master copy on this PC (Edit, or Configure).',
@@ -8008,6 +8039,9 @@ function Set-Machine([string]$Name) {
     $script:ConfigError = ''
     $script:RemoteError = ''
     $script:OldCompose = $false
+    $script:EnvCheckWanted = $true
+    $script:EnvMissing = $null
+    if ($script:EnvCheckForm) { $script:EnvCheckForm.Window.Close() }
     $script:DockerState = if (Test-DockerReady) { 'unknown' } else { 'missing' }
     $script:Rows.Clear()
     $script:RowIndex = @{}
@@ -8076,7 +8110,296 @@ function Invoke-SendToMachine {
     if (-not (Confirm-Action $msg)) { return }
     $steps = Get-SendSteps $m
     if (-not $steps) { return }
-    Add-Job "Send to $($m.Name)" $steps -Reload
+    Add-Job "Send to $($m.Name)" $steps -Reload -OnSuccess { $script:EnvCheckWanted = $true }
+}
+
+# ---------------------------------------------------------------------------
+# Missing .env values on another machine. Before the app reads a machine's
+# compose file, it reads that file and the .env beside it over SSH and lists
+# the ${NAME} variables the compose file needs that the .env doesn't set (ones
+# with a default, such as ${NAME:-x}, are fine). Values typed in are added to
+# the end of that machine's .env: nothing already in it is changed, and this
+# PC's own .env (with its Windows paths) is never sent.
+# ---------------------------------------------------------------------------
+$script:EnvMark      = '@@DCM-ENV-7d41@@'
+$script:EnvShellMark = '@@DCM-SHELL-7d41@@'
+$script:EnvNoFile    = '@@DCM-NO-ENV-7d41@@'
+
+# NAME -> first line it's used on, for each variable the compose text needs a value for.
+function Get-ComposeVarUses([string]$Text) {
+    $uses = New-Object Collections.Specialized.OrderedDictionary([StringComparer]::Ordinal)
+    $lines = $Text -split "`r?`n"
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if (-not (Test-ContentLine $lines[$i])) { continue }
+        $body = Remove-YamlComment $lines[$i]
+        foreach ($m in [regex]::Matches($body, '(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?+][^}]*)?\}|(?<!\$)\$([A-Za-z_][A-Za-z0-9_]*)')) {
+            # ${NAME:-x} / ${NAME-x} have a default, ${NAME:+x} is empty when unset: neither needs a value.
+            if ($m.Groups[2].Value -match '^:?[-+]') { continue }
+            $n = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[3].Value }
+            if (-not $uses.Contains($n)) { $uses[$n] = $i + 1 }
+        }
+    }
+    return $uses
+}
+
+# The names set in .env-style text (or a list of names, one per line), matched the way Compose does: capitals count.
+function Get-EnvTextNames([string]$Text) {
+    $set = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($l in ($Text -split "`r?`n")) {
+        if ($l -match '^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(=|$)') { [void]$set.Add($Matches[1]) }
+    }
+    return , $set
+}
+
+function Test-WindowsPathValue([string]$Value) {
+    return ($Value -match '^[A-Za-z]:([\\/]|$)' -or $Value -match '^\\\\' -or $Value.Contains('\'))
+}
+
+# One SSH command: the compose file, a marker, the .env (or a no-.env marker), a marker, the names in ssh's own environment.
+function Get-EnvCheckCommand($Machine) {
+    $name = ConvertTo-ShQuote ([IO.Path]::GetFileName($script:ComposePath))
+    return 'cd ' + (ConvertTo-ShQuote $Machine.Folder) + ' 2>/dev/null || exit 3; [ -f ' + $name + ' ] || exit 4; cat ' + $name +
+    "; echo; echo '$script:EnvMark'; if [ -f .env ]; then cat .env; echo; else echo '$script:EnvNoFile'; fi; echo '$script:EnvShellMark'; env | cut -d= -f1"
+}
+
+function Start-RemoteEnvCheck($Machine) {
+    $ssh = Find-Ssh
+    $tag = @{ Machine = $Machine.Name; Gen = $script:ConfigGen }
+    $fail = { param($Text) [pscustomobject]@{ ExitCode = -1; Output = ''; Error = $Text } }
+    if (-not $ssh) { Complete-RemoteEnvCheck (& $fail "ssh.exe wasn't found.") $tag; return }
+    try {
+        $runner = New-Object Dcm.Runner($ssh, [string[]](@(Get-SshArguments $Machine) + @(Get-EnvCheckCommand $Machine)), $script:ComposeDir, $true)
+        $runner.CommandLine = "check .env on $($Machine.Name)"
+        [void]$script:Calls.Add(@{ Runner = $runner; OnDone = { param($res, $t) Complete-RemoteEnvCheck $res $t }; Started = [DateTime]::Now; Tag = $tag })
+    } catch {
+        Complete-RemoteEnvCheck (& $fail $_.Exception.Message) $tag
+    }
+}
+
+function Complete-RemoteEnvCheck($Res, $Tag) {
+    # The compose file is read next, whatever the check found.
+    $script:ConfigLoading = $false
+    Request-ConfigLoad
+    $m = Get-Machine
+    if (-not $m -or $m.Name -ne $Tag.Machine -or $Tag.Gen -ne $script:ConfigGen) { return }
+    if ($Res.ExitCode -eq 3 -or $Res.ExitCode -eq 4) {
+        $what = if ($Res.ExitCode -eq 3) { "The folder $($m.Folder)" } else { "The compose file" }
+        Write-Activity "$what isn't on $($m.Name) yet, so its .env wasn't checked. Send copies the compose file there."
+        Set-MissingEnv $null
+        return
+    }
+    if ($Res.ExitCode -ne 0) {
+        $why = Get-FirstLines $Res.Error 2
+        Write-Activity "Couldn't check the .env on $($m.Name)$(if ($why) { ": $why" } else { " (exit code $($Res.ExitCode))" })"
+        return
+    }
+    $out = [string]$Res.Output
+    $a = $out.IndexOf($script:EnvMark)
+    $b = $out.IndexOf($script:EnvShellMark)
+    if ($a -lt 0 -or $b -lt $a) { Write-Activity "Couldn't check the .env on $($m.Name): its answer wasn't complete."; return }
+    $composeText = $out.Substring(0, $a)
+    $envText = $out.Substring($a + $script:EnvMark.Length, $b - $a - $script:EnvMark.Length)
+    $noEnv = $envText.Contains($script:EnvNoFile)
+    $have = Get-EnvTextNames $envText
+    foreach ($n in (Get-EnvTextNames $out.Substring($b + $script:EnvShellMark.Length))) { [void]$have.Add($n) }
+    $uses = Get-ComposeVarUses $composeText
+    $missing = @($uses.Keys | Where-Object { -not $have.Contains([string]$_) })
+    if (-not $missing.Count) {
+        Write-Activity "The .env on $($m.Name) sets every variable its compose file uses ($($uses.Count))."
+        Set-MissingEnv $null
+        return
+    }
+    $lines = @{}
+    foreach ($n in $missing) { $lines[$n] = $uses[$n] }
+    Write-Activity ("{0} variable(s) in the compose file on {1} aren't in its .env{2}: {3}" -f $missing.Count, $m.Name, $(if ($noEnv) { ' (there is no .env there)' } else { '' }), ($missing -join ', '))
+    Set-MissingEnv @{ Machine = $m.Name; Names = $missing; Lines = $lines; NoEnv = $noEnv }
+    # Opens on its own only when a name turns up that hasn't been shown yet; after Not now, the banner keeps it a click away.
+    $new = @($missing | Where-Object { -not $script:EnvShown.ContainsKey($m.Name + '|' + $_) })
+    if ($window.IsVisible -and $new.Count) {
+        foreach ($n in $missing) { $script:EnvShown[$m.Name + '|' + $n] = $true }
+        Show-MissingEnv
+    }
+}
+
+function Set-MissingEnv($Info) {
+    $script:EnvMissing = $Info
+    if (-not $Info -and $script:EnvCheckForm) { $script:EnvCheckForm.Window.Close() }
+    Update-Banner
+}
+
+$missingEnvXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Missing .env values" Width="760" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <StackPanel Margin="18">
+        <TextBlock x:Name="TxtEnvTitle" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,4" TextWrapping="Wrap"/>
+        <TextBlock x:Name="TxtEnvIntro" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+        <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="14">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="380">
+                <Grid x:Name="GridEnv">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" MinWidth="160"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                </Grid>
+            </ScrollViewer>
+        </Border>
+        <CheckBox x:Name="ChkEnvLocal" IsChecked="True" Margin="0,12,0,0" Foreground="{StaticResource Ink}"/>
+        <TextBlock x:Name="TxtEnvNote" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button x:Name="BtnEnvCopy" Content="Copy list" Tag="&#xE8C8;" Style="{StaticResource Btn}" ToolTip="Copy the names and where they're used"/>
+            <Button x:Name="BtnEnvAdd" Content="Add to .env" Tag="&#xE710;" Style="{StaticResource PrimaryBtn}" IsDefault="True"/>
+            <Button x:Name="BtnEnvLater" Content="Not now" Style="{StaticResource Btn}" IsCancel="True" Margin="0"/>
+        </StackPanel>
+    </StackPanel>
+</Window>
+'@
+
+function Show-MissingEnv {
+    $info = $script:EnvMissing
+    $m = Get-Machine
+    if (-not $info -or -not $m -or $m.Name -ne $info.Machine) { return }
+    if ($script:EnvCheckForm) { $script:EnvCheckForm.Window.Activate(); return }
+    $w = New-XamlObject $missingEnvXaml
+    try { $w.Owner = $window } catch { $w.WindowStartupLocation = 'CenterScreen' }
+    if ($window.Icon) { $w.Icon = $window.Icon }
+    $f = @{ Window = $w; Machine = $m.Name; Boxes = [ordered]@{} }
+    foreach ($n in 'TxtEnvTitle', 'TxtEnvIntro', 'GridEnv', 'ChkEnvLocal', 'TxtEnvNote', 'BtnEnvCopy', 'BtnEnvAdd', 'BtnEnvLater') { $f[$n] = $w.FindName($n) }
+    $script:EnvCheckForm = $f
+
+    $count = $info.Names.Count
+    $f.TxtEnvTitle.Text = if ($count -eq 1) { "1 value is missing from the .env on $($m.Name)" } else { "$count values are missing from the .env on $($m.Name)" }
+    $where = if ($info.NoEnv) { "There's no .env in $($m.Folder) yet, so these" } else { "$($m.Folder)/.env doesn't set these, so they" }
+    $f.TxtEnvIntro.Text = "The compose file on $($m.Name) uses the variables below. $where become empty, and a folder or setting that uses one can end up wrong. Type the value $($m.Name) should use (paths as $($m.Name) sees them, for example /volume1/music). Anything left empty is skipped."
+
+    # Hints: the machine's Env_ file here is for that machine, so its values are filled in; this PC's .env is only shown.
+    $machineEnv = if ($m.EnvFile) { Get-EnvFileValues (Join-Path $script:ComposeDir $m.EnvFile) } else { @{} }
+    $pcEnv = Get-EnvFileValues (Join-Path $script:ComposeDir '.env')
+    $soft = $w.FindResource('SoftInk')
+    $field = $w.FindResource('Field')
+    $row = 0
+    foreach ($n in $info.Names) {
+        $f.GridEnv.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition))
+        $label = New-Object Windows.Controls.TextBlock
+        $label.Text = $n
+        $label.FontWeight = [Windows.FontWeights]::SemiBold
+        $label.VerticalAlignment = 'Top'
+        $label.Margin = '0,6,14,10'
+        $label.ToolTip = "Used on line $($info.Lines[$n]) of the compose file on $($m.Name)"
+        [Windows.Controls.Grid]::SetRow($label, $row)
+        [void]$f.GridEnv.Children.Add($label)
+
+        $stack = New-Object Windows.Controls.StackPanel
+        $stack.Margin = '0,0,0,10'
+        $box = New-Object Windows.Controls.TextBox
+        $box.Style = $field
+        $notes = @("line $($info.Lines[$n])")
+        if ($machineEnv.ContainsKey($n)) {
+            $box.Text = [string]$machineEnv[$n].Value
+            $notes += "filled in from $($m.EnvFile) on this PC"
+        }
+        if ($pcEnv.ContainsKey($n) -and [string]$pcEnv[$n].Value) {
+            $pv = [string]$pcEnv[$n].Value
+            $notes += $(if (Test-WindowsPathValue $pv) { "this PC uses $pv (a Windows path, not for $($m.Name))" } else { "this PC uses $pv" })
+        }
+        $stack.Children.Add($box) | Out-Null
+        $hint = New-Object Windows.Controls.TextBlock
+        $hint.Text = $notes -join '   ·   '
+        $hint.Foreground = $soft
+        $hint.FontSize = 12
+        $hint.TextWrapping = 'Wrap'
+        $hint.Margin = '2,3,0,0'
+        $stack.Children.Add($hint) | Out-Null
+        [Windows.Controls.Grid]::SetRow($stack, $row)
+        [Windows.Controls.Grid]::SetColumn($stack, 1)
+        [void]$f.GridEnv.Children.Add($stack)
+        $f.Boxes[$n] = $box
+        $row++
+    }
+
+    if ($m.EnvFile) {
+        $f.ChkEnvLocal.Content = "Also add them to $($m.EnvFile) on this PC, so the next Send keeps them"
+        $f.ChkEnvLocal.ToolTip = "Send copies $($m.EnvFile) to $($m.Name) as .env. Without this, the next Send would take the new values away again."
+        $f.TxtEnvNote.Text = "Only new lines are added to the end of the .env on $($m.Name), after a dated .bak copy of it. Nothing already in it changes, and this PC's .env is never sent."
+    } else {
+        $f.ChkEnvLocal.Visibility = 'Collapsed'
+        $f.TxtEnvNote.Text = "$($m.Name) keeps its own .env (Send leaves it as it is). Only new lines are added to the end of it, after a dated .bak copy. Nothing already in it changes, and this PC's .env is never sent."
+    }
+    $f.BtnEnvAdd.Content = "Add to .env on $($m.Name)"
+
+    $f.BtnEnvCopy.Add_Click({
+            $info = $script:EnvMissing
+            if (-not $info) { return }
+            $text = ($info.Names | ForEach-Object { "{0}`tline {1}" -f $_, $info.Lines[$_] }) -join "`r`n"
+            try { [Windows.Clipboard]::SetText($text) } catch { Write-Verbose 'Clipboard busy.' }
+        })
+    $f.BtnEnvAdd.Add_Click({ Save-MissingEnv })
+    $f.BtnEnvLater.Add_Click({ $script:EnvCheckForm.Window.Close() })
+    $w.Add_Closed({ $script:EnvCheckForm = $null })
+    $w.Add_KeyDown({ param($src, $e) if ($e.Key -eq 'Escape') { $src.Close() } })
+    $w.Add_ContentRendered({
+            $f = $script:EnvCheckForm
+            if (-not $f) { return }
+            $first = @($f.Boxes.Values | Where-Object { -not $_.Text } | Select-Object -First 1)
+            if (-not $first.Count) { $first = @($f.Boxes.Values | Select-Object -First 1) }
+            if ($first.Count) { [void]$first[0].Focus() }
+        })
+    $w.Show()
+}
+
+function Save-MissingEnv {
+    $f = $script:EnvCheckForm
+    if (-not $f) { return }
+    $m = Get-Machine
+    if (-not $m -or $m.Name -ne $f.Machine) { $f.Window.Close(); return }
+    $pairs = @(foreach ($n in $f.Boxes.Keys) {
+            $v = $f.Boxes[$n].Text.Trim()
+            if ($v -ne '') { [pscustomobject]@{ Name = [string]$n; Value = $v } }
+        })
+    if (-not $pairs.Count) {
+        [void][Windows.MessageBox]::Show($f.Window, 'Type a value for at least one of them first.', 'Missing .env values', 'OK', 'Information')
+        return
+    }
+    $win = @($pairs | Where-Object { Test-WindowsPathValue $_.Value })
+    if ($win.Count) {
+        $list = ($win | ForEach-Object { "  $($_.Name)=$($_.Value)" }) -join "`n"
+        $ask = "These look like Windows paths, which $($m.Name) can't use:`n`n$list`n`nAdd them anyway?"
+        if ([Windows.MessageBox]::Show($f.Window, $ask, 'Missing .env values', 'YesNo', 'Warning') -ne 'Yes') { return }
+    }
+    $lines = @($pairs | ForEach-Object { '{0}={1}' -f $_.Name, (Format-EnvFileValue $_.Value) })
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) 'Docker Container Manager'
+    if (-not (Test-Path -LiteralPath $tmp)) { New-Item -ItemType Directory -Path $tmp -Force | Out-Null }
+    $tmp = Join-Path $tmp ([guid]::NewGuid().ToString('N') + '.send')
+    [IO.File]::WriteAllText($tmp, (($lines -join "`n") + "`n"), (New-Object Text.UTF8Encoding($false)))
+    # Back up .env, make sure it ends with a new line, then add each line whose name isn't in it yet.
+    $cmd = 'cd ' + (ConvertTo-ShQuote $m.Folder) + ' && stamp=$(date +%Y-%m-%d_%H%M%S) && if [ -f .env ]; then cp -p .env ".env.$stamp.bak"; fi && touch .env && ' +
+    'if [ -s .env ] && [ -n "$(tail -c 1 .env)" ]; then echo >> .env; fi && ' +
+    'while IFS= read -r line; do n=${line%%=*}; if grep -Eq "^[[:space:]]*(export[[:space:]]+)?$n[[:space:]]*=" .env; then echo "$n is already in .env, left as it is"; else printf ''%s\n'' "$line" >> .env; echo "added $n"; fi; done'
+    $names = ($pairs | ForEach-Object { $_.Name }) -join ', '
+    $script:EnvAddPending = @{ Machine = $m.Name; Pairs = $pairs; Local = ($m.EnvFile -and [bool]$f.ChkEnvLocal.IsChecked) }
+    $f.Window.Close()
+    Add-Job "Add $names to .env on $($m.Name)" @(New-SshStep $m $cmd "add $names to $($m.Folder)/.env on $($m.Name)" $tmp) -Reload -OnSuccess { Complete-MissingEnvAdd }
+}
+
+function Complete-MissingEnvAdd {
+    $add = $script:EnvAddPending
+    $script:EnvAddPending = $null
+    $script:EnvCheckWanted = $true
+    $m = Get-Machine
+    if (-not $add -or -not $add.Local -or -not $m -or $m.Name -ne $add.Machine -or -not $m.EnvFile) { return }
+    $path = Join-Path $script:ComposeDir $m.EnvFile
+    if (-not (Test-Path -LiteralPath $path)) { Write-Activity "$($m.EnvFile) isn't next to the compose file, so it wasn't changed."; return }
+    try {
+        $have = Get-EnvFileValues $path
+        $new = @($add.Pairs | Where-Object { -not $have.ContainsKey($_.Name) })
+        if (-not $new.Count) { Write-Activity "$($m.EnvFile) on this PC already has them."; return }
+        [void](Backup-ConfigFile $path)
+        $file = Read-TextFile $path
+        foreach ($p in $new) { Set-EnvFileValue $file $p.Name $p.Value }
+        Write-TextFile $file
+        Write-Activity "Added $(($new | ForEach-Object { $_.Name }) -join ', ') to $($m.EnvFile) on this PC."
+    } catch {
+        Write-Activity "Couldn't add them to $($m.EnvFile): $($_.Exception.Message)"
+    }
 }
 
 $machinesXaml = @'

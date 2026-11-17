@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.12-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.13-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -39,7 +39,7 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **Help** (F1): a guide to every part of the app inside it.
 - **About**: the version, what's new in each version (in sections that open and close), this PC's Docker and Compose versions and the keys.
 - **Portainer**: one button opens Portainer on the chosen machine, starts it when it's stopped, or installs it after showing the `docker run` line.
-- **Other machines**: manage the same compose file on a Linux laptop, a VM or a Synology NAS over SSH, from the machine list at the top. **Send** copies the compose file and that machine's `Env_` file (as `.env`) across.
+- **Other machines**: manage the same compose file on a Linux laptop, a VM or a Synology NAS over SSH, from the machine list at the top. **Send** copies the compose file and that machine's `Env_` file (as `.env`) across, and the app warns when a machine's `.env` is missing a variable its compose file uses, so you can add a value just for that machine.
 - Only changes the compose file or `.env` when you save in a Configure window, tidy the spacing or save groups, and backs both up first. Nothing is installed; settings are in `%APPDATA%`. There is no exe: it runs as a PowerShell script from a shortcut.
 
 ## 🖼️ Screenshots
@@ -57,7 +57,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-1. Download `Docker-Container-Manager-v1.12.zip` from the [latest release](../../releases/latest) and unzip it wherever you like to keep it.
+1. Download `Docker-Container-Manager-v1.13.zip` from the [latest release](../../releases/latest) and unzip it wherever you like to keep it.
 2. Double-click **Docker Container Manager.cmd** in the unzipped folder. It makes a **Docker Container Manager** shortcut there and in the Start menu, and starts the app. From then on, use the shortcut, the Start menu or a pinned taskbar button.
 
 Nothing is installed and no Windows settings are changed. The shortcut runs the script with PowerShell's execution policy bypassed for that run only. If the app doesn't open, run `"Docker Container Manager.cmd" debug` from a command prompt to start it in that window and see any errors.
@@ -194,6 +194,16 @@ With a machine picked, every docker command (status, start, stop, update, logs, 
 - **Send** backs up the compose file and `.env` on the machine (as dated `.bak` copies), then copies your compose file and the machine's `Env_` file there. Nothing is restarted; services whose settings changed show **Changed**, and **Apply changes** recreates them.
 - **Configure** saves values to the machine's `Env_` file on this PC, and **Save and recreate** sends it before recreating.
 - **Tidy spacing** and **Check** work on the file on this PC.
+
+#### Missing .env values
+
+Before the app reads a machine's compose file (when you pick the machine, change compose file, or after **Send**), it reads that compose file and the `.env` beside it over SSH and lists every `${NAME}` the compose file uses that the `.env` doesn't set. Variables with a default, such as `${NAME:-x}`, don't count, and neither do ones already set in the machine's own shell.
+
+If any are missing, a **Missing .env values** window lists them, with the line each one is used on and the value this PC uses (marked when it's a Windows path the machine can't use). A yellow bar stays at the top until they're set, and its **Add values...** button opens the window again.
+
+- Type the value that machine should use, such as `/volume1/music`, and press **Add to .env on <machine>**. Empty boxes are skipped.
+- Only new lines are added to the end of the machine's `.env`, after a dated `.bak` copy of it. Nothing already in it changes, and this PC's `.env` is never sent.
+- When the machine gets its `.env` from an `Env_` file, the values are filled in from that file, and **Also add them to Env_... on this PC** (on by default) adds them there too, so the next **Send** keeps them.
 
 ### Source pages
 
