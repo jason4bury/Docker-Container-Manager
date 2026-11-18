@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.16] - 2026-11-18
+
+### Changed
+- **Message boxes in the app's own look.** Every remaining question, warning and notice now opens in the app's own
+  light or dark style, with its own icon and rounded buttons, instead of the grey Windows message box. The wording and
+  buttons are the same, and the text can be selected and copied. If that window can't be shown for some reason, the
+  Windows box is used instead.
+- **Compose file list:** right-clicking the file that's open now shows a greyed-out **Remove from list** saying to switch
+  to another file first. Before, right-click did nothing on that entry, so it looked broken. Other entries work as before.
+- Right-clicking the closed compose file box says to open the list and right-click a file to take it off.
+- About > What's new describes these changes.
+
 ## [1.15] - 2026-11-18
 
 ### Changed

@@ -33,7 +33,7 @@
     Opens that compose file.
 
 .NOTES
-    Version:   1.15 (keep in step with CHANGELOG.md)
+    Version:   1.16 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -48,7 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.15'
+$script:AppVersion = '1.16'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 $script:AppId      = 'jason4bury.Docker-Container-Manager'   # taskbar ID, the same as the shortcut's
 
@@ -1063,6 +1063,84 @@ function New-XamlObject([string]$Xaml) {
     return $obj
 }
 
+# ---------------------------------------------------------------------------
+# Message boxes in the app's own look (light or dark), instead of the Windows one. Called as
+# $script:MsgBox.InvokeReturnAsIs(owner, text, title, buttons, icon, default), with the same
+# arguments and answers as [Windows.MessageBox]::Show; the owner can be left out. The text can be
+# selected and copied. If the app's window can't be made, the Windows box is used instead.
+# ---------------------------------------------------------------------------
+$msgBoxXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        SizeToContent="WidthAndHeight" MinWidth="360" MaxWidth="560" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <StackPanel Margin="18,18,18,16">
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock x:Name="MbGlyph" FontFamily="Segoe MDL2 Assets" FontSize="26" VerticalAlignment="Top" Margin="0,0,14,0"/>
+            <TextBox x:Name="MbText" Grid.Column="1" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent"
+                     Foreground="{StaticResource Ink}" Padding="0" Margin="0,3,0,0" VerticalAlignment="Center" IsTabStop="False"/>
+        </Grid>
+        <StackPanel x:Name="MbButtons" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0"/>
+    </StackPanel>
+</Window>
+'@
+
+function Show-AppMessage {
+    $a = @($args)
+    $owner = $null
+    if ($a.Count -and $a[0] -isnot [string]) { $owner = $a[0]; $a = @(if ($a.Count -gt 1) { $a[1..($a.Count - 1)] }) }
+    $text = [string]$a[0]
+    $title = if ($a.Count -gt 1 -and $a[1]) { [string]$a[1] } else { $script:AppName }
+    $buttons = if ($a.Count -gt 2 -and $a[2]) { [string]$a[2] } else { 'OK' }
+    $icon = if ($a.Count -gt 3 -and $a[3]) { [string]$a[3] } else { 'None' }
+    $default = if ($a.Count -gt 4 -and $a[4]) { [string]$a[4] } else { '' }
+    try {
+        if (-not $script:Pal) { throw 'No theme yet.' }
+        $w = New-XamlObject $msgBoxXaml
+        $w.Title = $title
+        if ($window -and $window.Icon) { $w.Icon = $window.Icon }
+        if ($owner -is [Windows.Window] -and $owner.IsLoaded) { $w.Owner = $owner } else { $w.WindowStartupLocation = 'CenterScreen' }
+        $look = switch ($icon) {
+            { $_ -in 'Information', 'Asterisk' } { @([char]0xE946, 'Accent') }
+            { $_ -in 'Warning', 'Exclamation' } { @([char]0xE7BA, 'Warn') }
+            { $_ -in 'Error', 'Hand', 'Stop' } { @([char]0xEA39, 'Bad') }
+            'Question' { @([char]0xE9CE, 'Accent') }
+            default { $null }
+        }
+        $glyph = $w.FindName('MbGlyph')
+        if ($look) { $glyph.Text = [string]$look[0]; $glyph.Foreground = $w.FindResource($look[1]) } else { $glyph.Visibility = 'Collapsed' }
+        $w.FindName('MbText').Text = $text
+        $names = @(switch ($buttons) { 'YesNo' { 'Yes', 'No' } 'YesNoCancel' { 'Yes', 'No', 'Cancel' } 'OKCancel' { 'OK', 'Cancel' } default { 'OK' } })
+        $cancel = switch ($buttons) { 'YesNo' { 'No' } 'YesNoCancel' { 'Cancel' } 'OKCancel' { 'Cancel' } default { 'OK' } }
+        if (-not $default -or $default -notin $names) { $default = $names[0] }
+        $w.Tag = $cancel
+        $panel = $w.FindName('MbButtons')
+        foreach ($n in $names) {
+            $b = New-Object Windows.Controls.Button
+            $b.Content = $n
+            $b.MinWidth = 84
+            $b.Margin = '8,0,0,0'
+            $b.Style = $w.FindResource($(if ($n -eq $default) { 'PrimaryBtn' } else { 'Btn' }))
+            $b.IsDefault = ($n -eq $default)
+            $b.IsCancel = ($n -eq $cancel)
+            $b.Add_Click({ $win = [Windows.Window]::GetWindow($this); $win.Tag = [string]$this.Content; $win.Close() })
+            [void]$panel.Children.Add($b)
+        }
+        $w.Add_ContentRendered({ foreach ($c in $this.FindName('MbButtons').Children) { if ($c.IsDefault) { [void]$c.Focus() } } })
+        [void]$w.ShowDialog()
+        return [Windows.MessageBoxResult]([string]$w.Tag)
+    } catch {
+        Write-Verbose "App message box failed: $($_.Exception.Message)"
+        $mbArgs = @($text, $title, [Windows.MessageBoxButton]$buttons, [Windows.MessageBoxImage]$icon)
+        if ($default) { $mbArgs += [Windows.MessageBoxResult]$default }
+        if ($owner -is [Windows.Window] -and $owner.IsLoaded) { $mbArgs = @($owner) + $mbArgs }
+        return [Windows.MessageBox]::Show.Invoke($mbArgs)
+    }
+}
+$script:MsgBox = ${function:Show-AppMessage}
+
 # Dark menus: a ContextMenu doesn't pick up the window's styles by itself.
 function Set-MenuTheme($Menu, $Owner) {
     if ($script:Theme -ne 'Dark' -or -not $Menu) { return }
@@ -1819,7 +1897,7 @@ function Start-DockerDesktop {
 
 function Open-InEditor([string]$Path, [int]$Line = 0) {
     if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
-        [void][Windows.MessageBox]::Show($window, "There's no file at $Path yet.", $script:AppName, 'OK', 'Information')
+        [void]$script:MsgBox.InvokeReturnAsIs($window, "There's no file at $Path yet.", $script:AppName, 'OK', 'Information')
         return
     }
     $editor = Resolve-EditorPath $script:Settings.Editor
@@ -1836,7 +1914,7 @@ function Open-InEditor([string]$Path, [int]$Line = 0) {
         }
         else { Start-Process -FilePath 'notepad.exe' -ArgumentList "`"$Path`"" }
     } catch {
-        [void][Windows.MessageBox]::Show($window, "Couldn't open the editor: $($_.Exception.Message)", $script:AppName, 'OK', 'Error')
+        [void]$script:MsgBox.InvokeReturnAsIs($window, "Couldn't open the editor: $($_.Exception.Message)", $script:AppName, 'OK', 'Error')
     }
 }
 
@@ -2403,8 +2481,15 @@ function Update-RecentList {
             $item.Content = '{0}{1}  ({2})' -f $prefix, (Split-Path -Leaf (Split-Path -Parent $f)), $f
             $item.Tag = $f
             $item.ToolTip = $f
-            if ($f -eq $script:ComposePath) { $item.FontWeight = 'SemiBold' }
-            else {
+            if ($f -eq $script:ComposePath) {
+                $item.FontWeight = 'SemiBold'
+                # The open file can't be taken off the list, but right-click still says why.
+                $menu = New-Object Windows.Controls.ContextMenu
+                $rm = New-Object Windows.Controls.MenuItem -Property @{ Header = 'Remove from list (open now: switch to another file first)'; IsEnabled = $false }
+                [void]$menu.Items.Add($rm)
+                Set-MenuTheme $menu $window
+                $item.ContextMenu = $menu
+            } else {
                 # Right-click: take it off this list (the file itself is never touched).
                 $menu = New-Object Windows.Controls.ContextMenu
                 $rm = New-Object Windows.Controls.MenuItem -Property @{ Header = 'Remove from list'; Tag = $f; ToolTip = "Takes it off this list only. The file stays where it is:`n$f" }
@@ -2416,6 +2501,11 @@ function Update-RecentList {
             [void]$ui.CmbRecent.Items.Add($item)
             if ($f -eq $script:ComposePath) { $ui.CmbRecent.SelectedItem = $item }
         }
+        # Right-click on the closed box: say where Remove from list is.
+        $hint = New-Object Windows.Controls.ContextMenu
+        [void]$hint.Items.Add((New-Object Windows.Controls.MenuItem -Property @{ Header = 'To take a file off this list, open the list and right-click it'; IsEnabled = $false }))
+        Set-MenuTheme $hint $window
+        $ui.CmbRecent.ContextMenu = $hint
         # Last entry: pick a compose file that isn't in the list yet.
         if ($ui.CmbRecent.Items.Count) { [void]$ui.CmbRecent.Items.Add((New-Object Windows.Controls.Separator)) }
         $other = New-Object Windows.Controls.ComboBoxItem
@@ -3127,7 +3217,7 @@ function Add-Job([string]$Label, [object[]]$Steps, [switch]$Reload, [scriptblock
     if (-not $steps.Count) { return }
     if (-not (Test-DockerReady)) {
         $what = if (Get-Machine) { "ssh.exe wasn't found" } else { "docker.exe wasn't found" }
-        [void][Windows.MessageBox]::Show($window, "$what, so nothing can be started.", $script:AppName, 'OK', 'Warning'); return
+        [void]$script:MsgBox.InvokeReturnAsIs($window, "$what, so nothing can be started.", $script:AppName, 'OK', 'Warning'); return
     }
     $script:JobQueue.Enqueue(@{ Label = $Label; Steps = $steps; Index = 0; Runner = $null; Failed = $false; Reload = [bool]$Reload; OnSuccess = $OnSuccess })
     $script:Timer.Interval = [TimeSpan]::FromMilliseconds(200)
@@ -3519,7 +3609,7 @@ function Format-Names([object[]]$Rows, [int]$Max = 4) {
 }
 
 function Confirm-Action([string]$Text) {
-    return ([Windows.MessageBox]::Show($window, $Text, $script:AppName, 'YesNo', 'Question') -eq 'Yes')
+    return ($script:MsgBox.InvokeReturnAsIs($window, $Text, $script:AppName, 'YesNo', 'Question') -eq 'Yes')
 }
 
 function Invoke-Start([object[]]$Rows, [string]$Label) {
@@ -4317,17 +4407,17 @@ function Invoke-TidySpacing {
         $file = Read-TextFile $path
         $tidy = Format-ComposeSpacing $file.Lines
     } catch {
-        [void][Windows.MessageBox]::Show($owner, "The spacing can't be tidied automatically. $($_.Exception.Message)", $script:AppName, 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($owner, "The spacing can't be tidied automatically. $($_.Exception.Message)", $script:AppName, 'OK', 'Warning')
         return
     }
     $changed = New-Object System.Collections.Generic.List[int]
     for ($i = 0; $i -lt $file.Lines.Count; $i++) { if ($file.Lines[$i] -cne $tidy[$i]) { $changed.Add($i + 1) } }
     if (-not $changed.Count) {
-        [void][Windows.MessageBox]::Show($owner, 'The spacing is already tidy. Nothing to change.', $script:AppName, 'OK', 'Information')
+        [void]$script:MsgBox.InvokeReturnAsIs($owner, 'The spacing is already tidy. Nothing to change.', $script:AppName, 'OK', 'Information')
         return
     }
     if (-not $script:DockerExe) {
-        [void][Windows.MessageBox]::Show($owner, "docker.exe wasn't found, so the tidied file can't be checked. Nothing was changed.", $script:AppName, 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($owner, "docker.exe wasn't found, so the tidied file can't be checked. Nothing was changed.", $script:AppName, 'OK', 'Warning')
         return
     }
     # The test copy sits next to the original so paths in the file mean the same.
@@ -4335,7 +4425,7 @@ function Invoke-TidySpacing {
     try {
         Write-TextFile @{ Path = $tmpPath; Lines = $tidy; Bom = $file.Bom; NewLine = $file.NewLine; EndsWithNewline = $file.EndsWithNewline }
     } catch {
-        [void][Windows.MessageBox]::Show($owner, "Couldn't write a test copy next to the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($owner, "Couldn't write a test copy next to the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Warning')
         return
     }
     $script:Tidy = @{ Path = $path; File = $file; Lines = $tidy; Changed = $changed; TmpPath = $tmpPath; Owner = $owner; Before = $null
@@ -4357,20 +4447,20 @@ function Complete-TidySpacing($After) {
     $before = $t.Before
     Set-Status ''
     if ($before.ExitCode -ne 0) {
-        [void][Windows.MessageBox]::Show($t.Owner, "Docker can't read the compose file as it is now, so tidying can't be checked safely. Nothing was changed.`n`nFix the errors first. Docker says: $(Get-FirstLines $before.Error 3)", $script:AppName, 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($t.Owner, "Docker can't read the compose file as it is now, so tidying can't be checked safely. Nothing was changed.`n`nFix the errors first. Docker says: $(Get-FirstLines $before.Error 3)", $script:AppName, 'OK', 'Warning')
         return
     }
     if ($After.ExitCode -ne 0 -or $After.Output -cne $before.Output) {
         Write-Activity 'Tidy spacing: the tidied file would mean something different to Docker, so it was not saved.'
-        [void][Windows.MessageBox]::Show($t.Owner, "Tidying would change what the file means to Docker, so nothing was changed. The Check window lists the lines to fix by hand.", $script:AppName, 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($t.Owner, "Tidying would change what the file means to Docker, so nothing was changed. The Check window lists the lines to fix by hand.", $script:AppName, 'OK', 'Warning')
         return
     }
     $list = @($t.Changed | Select-Object -First 15) -join ', '
     if ($t.Changed.Count -gt 15) { $list += " and $($t.Changed.Count - 15) more" }
     $q = "Tidy the spacing on $($t.Changed.Count) line(s)?`n`nLines $list`n`nDocker reads the tidied file exactly the same as now. A copy of the current file is kept in the backups folder first."
-    if ([Windows.MessageBox]::Show($t.Owner, $q, $script:AppName, 'YesNo', 'Question') -ne 'Yes') { return }
+    if ($script:MsgBox.InvokeReturnAsIs($t.Owner, $q, $script:AppName, 'YesNo', 'Question') -ne 'Yes') { return }
     if ((Get-Item -LiteralPath $t.Path).LastWriteTimeUtc -ne $t.Stamp) {
-        [void][Windows.MessageBox]::Show($t.Owner, 'The compose file was saved by something else in the meantime, so nothing was changed. Press Tidy spacing again.', $script:AppName, 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($t.Owner, 'The compose file was saved by something else in the meantime, so nothing was changed. Press Tidy spacing again.', $script:AppName, 'OK', 'Warning')
         return
     }
     try {
@@ -4379,7 +4469,7 @@ function Complete-TidySpacing($After) {
         Write-TextFile $t.File
         Write-Activity "Tidied the spacing on $($t.Changed.Count) line(s) of the compose file. Backup: $bak"
     } catch {
-        [void][Windows.MessageBox]::Show($t.Owner, "Couldn't save the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Error')
+        [void]$script:MsgBox.InvokeReturnAsIs($t.Owner, "Couldn't save the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Error')
     }
     if ($script:CheckForm) { Update-CheckWindow }
 }
@@ -4670,7 +4760,7 @@ function Invoke-Prune([string]$What) {
         }
         default { return }
     }
-    if ([Windows.MessageBox]::Show($owner, $q, $script:AppName, 'YesNo', 'Question') -ne 'Yes') { return }
+    if ($script:MsgBox.InvokeReturnAsIs($owner, $q, $script:AppName, 'YesNo', 'Question') -ne 'Yes') { return }
     Add-Job $label $steps
 }
 
@@ -4683,15 +4773,15 @@ function Invoke-VolumePrune {
         $d = $script:DiskForm
         if (-not $d) { return }
         $owner = $d.Window
-        if ($res.ExitCode -ne 0) { [void][Windows.MessageBox]::Show($owner, "Docker didn't answer: $(Get-FirstLines $res.Error 2)", $script:AppName, 'OK', 'Warning'); return }
+        if ($res.ExitCode -ne 0) { [void]$script:MsgBox.InvokeReturnAsIs($owner, "Docker didn't answer: $(Get-FirstLines $res.Error 2)", $script:AppName, 'OK', 'Warning'); return }
         $names = @(($res.Output -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        if (-not $names.Count) { [void][Windows.MessageBox]::Show($owner, 'Every volume is used by a container. Nothing to remove.', $script:AppName, 'OK', 'Information'); return }
+        if (-not $names.Count) { [void]$script:MsgBox.InvokeReturnAsIs($owner, 'Every volume is used by a container. Nothing to remove.', $script:AppName, 'OK', 'Information'); return }
         $shown = @($names | Select-Object -First 25) -join "`n"
         if ($names.Count -gt 25) { $shown += "`n... and $($names.Count - 25) more" }
         $q1 = "These $($names.Count) volume(s) aren't used by any container, running or stopped:`n`n$shown`n`nRemove them? Their data is deleted for good."
-        if ([Windows.MessageBox]::Show($owner, $q1, $script:AppName, 'YesNo', 'Warning') -ne 'Yes') { return }
+        if ($script:MsgBox.InvokeReturnAsIs($owner, $q1, $script:AppName, 'YesNo', 'Warning') -ne 'Yes') { return }
         $q2 = "Are you sure? This can't be undone.`n`nThe data in these $($names.Count) volume(s) is lost. A container you remove and make again later starts with empty volumes."
-        if ([Windows.MessageBox]::Show($owner, $q2, $script:AppName, 'YesNo', 'Warning', 'No') -ne 'Yes') { return }
+        if ($script:MsgBox.InvokeReturnAsIs($owner, $q2, $script:AppName, 'YesNo', 'Warning', 'No') -ne 'Yes') { return }
         Add-Job "Remove $($names.Count) unused volume(s)" @(New-DockerStep (@('volume', 'rm') + $names) -AllowFail)
     }
 }
@@ -4995,10 +5085,10 @@ function Set-ConfigureEntry($State) {
     if ($x.IsNew) {
         $name = $State.NameBox.Text.Trim()
         if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_.-]*$') {
-            [void][Windows.MessageBox]::Show($State.Window, 'Use letters, numbers and _ for the name, starting with a letter.', $script:AppName, 'OK', 'Information'); return
+            [void]$script:MsgBox.InvokeReturnAsIs($State.Window, 'Use letters, numbers and _ for the name, starting with a letter.', $script:AppName, 'OK', 'Information'); return
         }
         foreach ($o in $State.Entries) {
-            if ($o -ne $x -and $o.Name -eq $name) { [void][Windows.MessageBox]::Show($State.Window, "There's already a variable called $name.", $script:AppName, 'OK', 'Information'); return }
+            if ($o -ne $x -and $o.Name -eq $name) { [void]$script:MsgBox.InvokeReturnAsIs($State.Window, "There's already a variable called $name.", $script:AppName, 'OK', 'Information'); return }
         }
         $x.Name = $name
         $x.Secret = $name -match $script:SecretNamePattern
@@ -5024,7 +5114,7 @@ function Save-ConfigureEntries($State, [switch]$Recreate) {
     $changed = @($State.Entries | Where-Object { $_.Status -ne '' })
     if (-not $changed.Count) { return }
     if ((Get-FileStamp) -ne $State.Stamp) {
-        [void][Windows.MessageBox]::Show($State.Window, "The compose file or .env was changed somewhere else since this window opened, so nothing was saved.`n`nYour changes are still listed. Note them, then press Reload.", $script:AppName, 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($State.Window, "The compose file or .env was changed somewhere else since this window opened, so nothing was saved.`n`nYour changes are still listed. Note them, then press Reload.", $script:AppName, 'OK', 'Warning')
         return
     }
     $compose = Read-TextFile $script:ComposePath
@@ -5033,13 +5123,13 @@ function Save-ConfigureEntries($State, [switch]$Recreate) {
         if ($x.IsNew) { continue }
         $match = @($info.Entries | Where-Object { $_.Line -eq $x.Line -and $_.Name -eq $x.Name })
         if (-not $match.Count) {
-            [void][Windows.MessageBox]::Show($State.Window, "The compose file doesn't match what this window read any more, so nothing was saved. Press Reload.", $script:AppName, 'OK', 'Warning')
+            [void]$script:MsgBox.InvokeReturnAsIs($State.Window, "The compose file doesn't match what this window read any more, so nothing was saved. Press Reload.", $script:AppName, 'OK', 'Warning')
             return
         }
     }
     $why = Get-NoEnvTargetReason
     if ($why -and @($changed | Where-Object { $_.IsNew -or $_.VarName -or $_.MoveToEnv }).Count) {
-        [void][Windows.MessageBox]::Show($State.Window, "Nothing was saved, because some of the changes belong in .env.`n`n$why", $script:AppName, 'OK', 'Information')
+        [void]$script:MsgBox.InvokeReturnAsIs($State.Window, "Nothing was saved, because some of the changes belong in .env.`n`n$why", $script:AppName, 'OK', 'Information')
         return
     }
     $envPath = Get-ConfigureEnvPath
@@ -5109,7 +5199,7 @@ function Save-ConfigureEntries($State, [switch]$Recreate) {
             }
         }
     } catch {
-        [void][Windows.MessageBox]::Show($State.Window, "Saving failed: $($_.Exception.Message)", $script:AppName, 'OK', 'Error')
+        [void]$script:MsgBox.InvokeReturnAsIs($State.Window, "Saving failed: $($_.Exception.Message)", $script:AppName, 'OK', 'Error')
         Write-Activity "Configure $($State.Service): saving failed: $($_.Exception.Message)"
         return
     }
@@ -5159,7 +5249,7 @@ function Open-ContainerShell([Dcm.Row]$Row) {
             Start-Process -FilePath $script:DockerExe -ArgumentList $argLine
         }
         Write-Activity "Opened a shell in $($Row.ContainerName)"
-    } catch { [void][Windows.MessageBox]::Show($window, "Couldn't open a shell: $($_.Exception.Message)", $script:AppName, 'OK', 'Error') }
+    } catch { [void]$script:MsgBox.InvokeReturnAsIs($window, "Couldn't open a shell: $($_.Exception.Message)", $script:AppName, 'OK', 'Error') }
 }
 
 function Show-Configure([Dcm.Row]$Row) {
@@ -5207,7 +5297,7 @@ function Show-Configure([Dcm.Row]$Row) {
                 $p = [string]$this.Tag
                 if (Test-Path -LiteralPath $p -PathType Container) { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$p`"" }
                 elseif (Test-Path -LiteralPath $p) { Start-Process -FilePath 'explorer.exe' -ArgumentList "/select,`"$p`"" }
-                else { [void][Windows.MessageBox]::Show("$p doesn't exist yet. Docker creates it when the container starts.", $script:AppName, 'OK', 'Information') }
+                else { [void]$script:MsgBox.InvokeReturnAsIs("$p doesn't exist yet. Docker creates it when the container starts.", $script:AppName, 'OK', 'Information') }
             })
         [void]$menu.Items.Add($item)
     }
@@ -5236,7 +5326,7 @@ function Show-Configure([Dcm.Row]$Row) {
             $s = $this.DataContext
             $why = Get-NoEnvTargetReason
             if ($why) {
-                [void][Windows.MessageBox]::Show($s.Window, "A new variable's value goes in .env.`n`n$why", $script:AppName, 'OK', 'Information')
+                [void]$script:MsgBox.InvokeReturnAsIs($s.Window, "A new variable's value goes in .env.`n`n$why", $script:AppName, 'OK', 'Information')
                 return
             }
             $x = New-Object Dcm.EnvEntry
@@ -5262,7 +5352,7 @@ function Show-Configure([Dcm.Row]$Row) {
             param($src, $e)
             $s = $src.DataContext
             $n = @($s.Entries | Where-Object { $_.Status -ne '' }).Count
-            if ($n -and [Windows.MessageBox]::Show($src, "Close without saving $n change(s)?", $script:AppName, 'YesNo', 'Question') -ne 'Yes') { $e.Cancel = $true }
+            if ($n -and $script:MsgBox.InvokeReturnAsIs($src, "Close without saving $n change(s)?", $script:AppName, 'YesNo', 'Question') -ne 'Yes') { $e.Cancel = $true }
         })
     $w.Add_Closed({ $script:ConfigureWindows.Remove($this.DataContext) })
     $w.Add_KeyDown({ param($src, $e) if ($e.Key -eq 'Escape') { $src.Close() } })
@@ -5355,7 +5445,7 @@ function Show-Logs([Dcm.Row]$Row) {
             $dlg.Filter = 'Log files (*.log)|*.log|Text files (*.txt)|*.txt'
             if ($dlg.ShowDialog($s.Window)) {
                 try { [IO.File]::WriteAllLines($dlg.FileName, $s.Lines.ToArray()) }
-                catch { [void][Windows.MessageBox]::Show($s.Window, $_.Exception.Message, $script:AppName) }
+                catch { [void]$script:MsgBox.InvokeReturnAsIs($s.Window, $_.Exception.Message, $script:AppName) }
             }
         })
     $w.Add_Closed({
@@ -5699,16 +5789,16 @@ function Show-Settings {
             $f = $script:SettingsForm
             $sec = 0
             if (-not [int]::TryParse($f.TxtRefresh.Text.Trim(), [ref]$sec) -or $sec -lt 2 -or $sec -gt 300) {
-                [void][Windows.MessageBox]::Show($f.Window, 'Check status every: enter a number of seconds from 2 to 300.', 'Settings', 'OK', 'Warning'); return
+                [void]$script:MsgBox.InvokeReturnAsIs($f.Window, 'Check status every: enter a number of seconds from 2 to 300.', 'Settings', 'OK', 'Warning'); return
             }
             $prefix = $f.TxtPrefix.Text.Trim().TrimEnd('.')
             if ($prefix -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
-                [void][Windows.MessageBox]::Show($f.Window, 'Label prefix: use letters, numbers, dots, dashes or underscores, for example home.', 'Settings', 'OK', 'Warning'); return
+                [void]$script:MsgBox.InvokeReturnAsIs($f.Window, 'Label prefix: use letters, numbers, dots, dashes or underscores, for example home.', 'Settings', 'OK', 'Warning'); return
             }
             $editor = $f.TxtEditor.Text.Trim().Trim('"')
             if ($editor -and -not (Test-EditorPath $editor).Ok) {
                 Update-EditorCheck
-                [void][Windows.MessageBox]::Show($f.Window, "Editor: there's no program at $(Resolve-EditorPath $editor). Leave it empty to use Notepad, or see the suggestion under the box.", 'Settings', 'OK', 'Warning'); return
+                [void]$script:MsgBox.InvokeReturnAsIs($f.Window, "Editor: there's no program at $(Resolve-EditorPath $editor). Leave it empty to use Notepad, or see the suggestion under the box.", 'Settings', 'OK', 'Warning'); return
             }
             $prefixChanged = ($prefix -ne $script:Settings.LabelPrefix)
             $script:Settings.LabelPrefix = $prefix
@@ -5727,7 +5817,7 @@ function Show-Settings {
             if ($theme) { $script:Settings.Theme = $theme }
             Save-Settings
             if ($iconsChanged) { Update-Icons }
-            if ($themeChanged) { [void][Windows.MessageBox]::Show($f.Window, 'The new theme is used the next time you start the app.', 'Settings', 'OK', 'Information') }
+            if ($themeChanged) { [void]$script:MsgBox.InvokeReturnAsIs($f.Window, 'The new theme is used the next time you start the app.', 'Settings', 'OK', 'Information') }
             $script:NextPoll = [DateTime]::Now.AddSeconds($sec)
             if ($prefixChanged) { Request-ConfigLoad }
             $f.Window.Close()
@@ -5740,6 +5830,10 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.16' = @(
+        'Message boxes (questions, warnings and notices) now use the app''s own light or dark look instead of the grey Windows box, and their text can be selected and copied.',
+        'Compose file list: right-clicking the file that''s open now shows a greyed-out Remove from list that says to switch to another file first, and right-clicking the closed box says to open the list and right-click a file. Before, both did nothing.'
+    )
     '1.15' = @(
         'SSH key help: the two setup commands (make a key, copy it to the machine) are in boxes you can select, and each has a Copy button.',
         'When a machine doesn''t answer in time, the banner says so in plain English (check it''s switched on, connected and that its SSH login is right) instead of showing the docker command. The command still goes to the Activity log.',
@@ -6123,7 +6217,7 @@ function Read-PortainerFolder {
         elseif ((Get-Machine) -and $v -notmatch '^/') { $bad = "Use the full path on $where, starting with /." }
         elseif (-not (Get-Machine) -and $v -notmatch '^[A-Za-z]:/') { $bad = 'Use a full path on this PC, starting with a drive letter, for example E:/Docker/portainer.' }
         if (-not $bad) { return $v }
-        [void][Windows.MessageBox]::Show($window, $bad, 'Portainer data folder', 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($window, $bad, 'Portainer data folder', 'OK', 'Warning')
         $value = $v
     }
 }
@@ -6140,7 +6234,7 @@ function Invoke-Portainer([string]$What) {
     if ($What -eq 'open') { Open-Portainer; return }
     if ($What -eq 'folder') { $f = Read-PortainerFolder; if ($f) { Set-PortainerFolder $f }; return }
     if (-not (Test-DockerReady)) {
-        [void][Windows.MessageBox]::Show($window, "Docker can't be reached on $(Get-MachineName), so Portainer can't be checked.", $script:AppName, 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($window, "Docker can't be reached on $(Get-MachineName), so Portainer can't be checked.", $script:AppName, 'OK', 'Warning')
         return
     }
     $script:PortainerWhat = $What
@@ -6152,12 +6246,12 @@ function Complete-PortainerCheck($Res) {
     Set-Status ''
     $where = Get-MachineName
     if ($Res.ExitCode -ne 0) {
-        [void][Windows.MessageBox]::Show($window, "Docker on $where didn't answer: $(Get-FirstLines $Res.Error 2)", $script:AppName, 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($window, "Docker on $where didn't answer: $(Get-FirstLines $Res.Error 2)", $script:AppName, 'OK', 'Warning')
         return
     }
     $state = @(@(($Res.Output -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }) + @(''))[0]
     if ($script:PortainerWhat -eq 'update') {
-        if (-not $state) { [void][Windows.MessageBox]::Show($window, "Portainer isn't installed on $where. Press Portainer to install it.", $script:AppName, 'OK', 'Information'); return }
+        if (-not $state) { [void]$script:MsgBox.InvokeReturnAsIs($window, "Portainer isn't installed on $where. Press Portainer to install it.", $script:AppName, 'OK', 'Information'); return }
         # Use the folder the container has now, so an update never starts Portainer with empty data.
         Start-DockerCall -Arguments @('inspect', 'portainer', '--format', '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}|{{.Name}}|{{.Source}}{{end}}{{end}}') -OnDone { param($res) Complete-PortainerUpdate $res }
         return
@@ -6562,7 +6656,7 @@ function Stop-SaveGroups([string]$Step, [string]$Message) {
     if ($s -and $s.Tmp) { Remove-Item -LiteralPath $s.Tmp -Force -ErrorAction SilentlyContinue }
     if ($script:AutoGroupForm) { $script:AutoGroupForm.Save.IsEnabled = $true; $script:AutoGroupForm.Note.Text = 'Nothing was saved.' }
     $b = $script:SaveGroupsBox
-    if (-not $b) { [void][Windows.MessageBox]::Show($window, $Message, $script:AppName, 'OK', 'Warning'); return }
+    if (-not $b) { [void]$script:MsgBox.InvokeReturnAsIs($window, $Message, $script:AppName, 'OK', 'Warning'); return }
     if ($Step) { Set-SaveGroupsStep $Step 'failed' }
     $b.Busy = $false
     $b.SgTitle.Text = "Groups weren't saved"
@@ -6609,13 +6703,13 @@ function Save-AutoGroups {
     $label = "$([string]$script:Settings.LabelPrefix).group"
     $want = [ordered]@{}
     foreach ($x in $f.Items) { $g = $x.Box.Text.Trim(); if ($g) { $want[$x.Service] = $g } }
-    if (-not $want.Count) { [void][Windows.MessageBox]::Show($f.Window, 'Every group is empty, so there is nothing to save.', $script:AppName, 'OK', 'Information'); return }
+    if (-not $want.Count) { [void]$script:MsgBox.InvokeReturnAsIs($f.Window, 'Every group is empty, so there is nothing to save.', $script:AppName, 'OK', 'Information'); return }
     if ((Get-FileStamp) -ne $f.Stamp) {
-        [void][Windows.MessageBox]::Show($f.Window, 'The compose file was changed somewhere else since this window opened, so nothing was saved. Close this window and press Group automatically again.', $script:AppName, 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($f.Window, 'The compose file was changed somewhere else since this window opened, so nothing was saved. Close this window and press Group automatically again.', $script:AppName, 'OK', 'Warning')
         return
     }
     try { $file = Read-TextFile $script:ComposePath }
-    catch { [void][Windows.MessageBox]::Show($f.Window, "Couldn't read the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Error'); return }
+    catch { [void]$script:MsgBox.InvokeReturnAsIs($f.Window, "Couldn't read the compose file: $($_.Exception.Message)", $script:AppName, 'OK', 'Error'); return }
     $f.Save.IsEnabled = $false
     $script:AutoGroupSave = @{
         File = $file; Want = $want; Services = @($want.Keys); Index = 0; Form = (Get-LabelForm $file.Lines ([string]$script:Settings.LabelPrefix))
@@ -6759,7 +6853,7 @@ function Complete-SaveGroups {
     $msg += "`n`nThey show Changed until you press Apply changes, which recreates them. Their data is kept."
     if (Get-Machine) { $msg += " They run on $(Get-MachineName), so press Send first." }
     if ($f) { $f.Window.Close() }
-    [void][Windows.MessageBox]::Show($window, $msg, 'Group automatically', 'OK', 'Information')
+    [void]$script:MsgBox.InvokeReturnAsIs($window, $msg, 'Group automatically', 'OK', 'Information')
 }
 
 # ---------------------------------------------------------------------------
@@ -6968,7 +7062,7 @@ function Update-MyGroupsFromCompose {
     $g = $script:MyGroupsForm
     [void]$g.Grid.CommitEdit()
     $groups = Get-ComposeGroups
-    if (-not $groups.Count) { [void][Windows.MessageBox]::Show($g.Window, 'The compose file open now has no group labels to add.', 'My groups', 'OK', 'Information'); return }
+    if (-not $groups.Count) { [void]$script:MsgBox.InvokeReturnAsIs($g.Window, 'The compose file open now has no group labels to add.', 'My groups', 'OK', 'Information'); return }
     $have = @{}
     foreach ($e in $g.List) { if ($e.Service) { $have[$e.Service.Trim().ToLowerInvariant()] = $e } }
     $new = New-Object System.Collections.ArrayList
@@ -6984,7 +7078,7 @@ function Update-MyGroupsFromCompose {
         $shown = @($changed | Select-Object -First 20 | ForEach-Object { "$($_):  $($have[$_.ToLowerInvariant()].Group.Trim())  ->  $($groups[$_])" }) -join "`n"
         if ($changed.Count -gt 20) { $shown += "`n... and $($changed.Count - 20) more" }
         $q = "The compose file gives $($changed.Count) container(s) a different group from My groups:`n`n$shown`n`nChange them to the compose file's group?`n`nYes: change them$(if ($new.Count) { " and add the $($new.Count) new one(s)" }).`nNo: keep My groups as it is$(if ($new.Count) { " and only add the new one(s)" }).`nCancel: change nothing."
-        $a = [Windows.MessageBox]::Show($g.Window, $q, 'My groups', 'YesNoCancel', 'Question')
+        $a = $script:MsgBox.InvokeReturnAsIs($g.Window, $q, 'My groups', 'YesNoCancel', 'Question')
         if ($a -eq 'Cancel') { return }
         $doChange = ($a -eq 'Yes')
     }
@@ -7016,11 +7110,11 @@ function Save-MyGroupsWindow {
     }
     if ($problems.Count) {
         $shown = @($problems | Select-Object -First 15) -join "`n"
-        [void][Windows.MessageBox]::Show($g.Window, "Nothing was saved. Fix these first:`n`n$shown", 'My groups', 'OK', 'Warning')
+        [void]$script:MsgBox.InvokeReturnAsIs($g.Window, "Nothing was saved. Fix these first:`n`n$shown", 'My groups', 'OK', 'Warning')
         return $false
     }
     try { Save-MyGroupsFile @($keep) }
-    catch { [void][Windows.MessageBox]::Show($g.Window, "Couldn't save My groups: $($_.Exception.Message)", 'My groups', 'OK', 'Error'); return $false }
+    catch { [void]$script:MsgBox.InvokeReturnAsIs($g.Window, "Couldn't save My groups: $($_.Exception.Message)", 'My groups', 'OK', 'Error'); return $false }
     Write-Activity "My groups: saved $($keep.Count) container(s) to $script:MyGroupsPath."
     # Show it as saved: tidied and sorted the way the file is.
     $g.List.Clear()
@@ -7085,8 +7179,8 @@ function Show-MyGroups($Owner) {
     $w.FindName('BtnMgClose').Add_Click({ $script:MyGroupsForm.Window.Close() })
     $w.FindName('BtnMgEditor').Add_Click({
             $s = $script:MyGroupsForm
-            if (-not (Test-Path -LiteralPath $script:MyGroupsPath)) { [void][Windows.MessageBox]::Show($s.Window, 'There''s no my-groups.txt yet. Press Save first.', 'My groups', 'OK', 'Information'); return }
-            if ($s.Dirty) { [void][Windows.MessageBox]::Show($s.Window, 'The editor shows the saved file. Your changes here aren''t saved yet.', 'My groups', 'OK', 'Information') }
+            if (-not (Test-Path -LiteralPath $script:MyGroupsPath)) { [void]$script:MsgBox.InvokeReturnAsIs($s.Window, 'There''s no my-groups.txt yet. Press Save first.', 'My groups', 'OK', 'Information'); return }
+            if ($s.Dirty) { [void]$script:MsgBox.InvokeReturnAsIs($s.Window, 'The editor shows the saved file. Your changes here aren''t saved yet.', 'My groups', 'OK', 'Information') }
             Open-InEditor $script:MyGroupsPath
         })
     $w.FindName('BtnMgFolder').Add_Click({
@@ -7100,7 +7194,7 @@ function Show-MyGroups($Owner) {
             if (-not $s) { return }
             [void]$s.Grid.CommitEdit(); [void]$s.Grid.CommitEdit()
             if (-not $s.Dirty) { return }
-            $a = [Windows.MessageBox]::Show($s.Window, 'Save the changes to My groups?', 'My groups', 'YesNoCancel', 'Question')
+            $a = $script:MsgBox.InvokeReturnAsIs($s.Window, 'Save the changes to My groups?', 'My groups', 'YesNoCancel', 'Question')
             if ($a -eq 'Cancel' -or ($a -eq 'Yes' -and -not (Save-MyGroupsWindow))) { $e.Cancel = $true }
         })
     $w.Add_Closed({ $script:MyGroupsForm = $null })
@@ -7117,13 +7211,13 @@ function Reset-MyGroups {
     $q = "Replace My groups with the list built into the app ($(Get-MyGroupsCount $builtIn) containers)?"
     $q += if (Test-Path -LiteralPath $script:MyGroupsPath) { "`n`nYour list now is kept as my-groups.bak.txt in the same folder." } else { '' }
     if ($s.Dirty) { $q += "`n`nChanges here that aren't saved are lost." }
-    if ([Windows.MessageBox]::Show($s.Window, $q, 'My groups', 'YesNo', 'Warning', 'No') -ne 'Yes') { return }
+    if ($script:MsgBox.InvokeReturnAsIs($s.Window, $q, 'My groups', 'YesNo', 'Warning', 'No') -ne 'Yes') { return }
     try {
         $dir = Split-Path -Parent $script:MyGroupsPath
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         if (Test-Path -LiteralPath $script:MyGroupsPath) { Copy-Item -LiteralPath $script:MyGroupsPath -Destination (Join-Path $dir 'my-groups.bak.txt') -Force }
         [IO.File]::WriteAllBytes($script:MyGroupsPath, $builtIn)
-    } catch { [void][Windows.MessageBox]::Show($s.Window, "Couldn't reset My groups: $($_.Exception.Message)", 'My groups', 'OK', 'Error'); return }
+    } catch { [void]$script:MsgBox.InvokeReturnAsIs($s.Window, "Couldn't reset My groups: $($_.Exception.Message)", 'My groups', 'OK', 'Error'); return }
     Write-Activity 'My groups: replaced with the built-in list (the old one is my-groups.bak.txt).'
     $s.List.Clear()
     $read = Read-MyGroups
@@ -7425,7 +7519,7 @@ function Export-List {
     $scope = ''
     if ($shown.Count -and $shown.Count -lt $rows.Count) {
         $q = "Export only the $($shown.Count) container(s) the list shows now?`n`nYes: only those (the group, filter and search you picked).`nNo: all $($rows.Count) containers."
-        $a = [Windows.MessageBox]::Show($window, $q, 'Export', 'YesNoCancel', 'Question')
+        $a = $script:MsgBox.InvokeReturnAsIs($window, $q, 'Export', 'YesNoCancel', 'Question')
         if ($a -eq 'Cancel') { return }
         if ($a -eq 'Yes') { $rows = $shown; $scope = 'the ones shown' }
     }
@@ -7437,9 +7531,9 @@ function Export-List {
     $dlg.InitialDirectory = [Environment]::GetFolderPath('MyDocuments')
     if (-not $dlg.ShowDialog($window)) { return }
     try { [IO.File]::WriteAllText($dlg.FileName, (New-ExportHtml $rows $scope), (New-Object Text.UTF8Encoding $false)) }
-    catch { [void][Windows.MessageBox]::Show($window, "Couldn't save the file: $($_.Exception.Message)", $script:AppName, 'OK', 'Error'); return }
+    catch { [void]$script:MsgBox.InvokeReturnAsIs($window, "Couldn't save the file: $($_.Exception.Message)", $script:AppName, 'OK', 'Error'); return }
     Write-Activity "Exported $($rows.Count) container(s) to $($dlg.FileName)"
-    if ([Windows.MessageBox]::Show($window, "Saved $($dlg.FileName)`n`nOpen it in your browser now?", 'Export', 'YesNo', 'Question') -eq 'Yes') {
+    if ($script:MsgBox.InvokeReturnAsIs($window, "Saved $($dlg.FileName)`n`nOpen it in your browser now?", 'Export', 'YesNo', 'Question') -eq 'Yes') {
         try { Start-Process -FilePath $dlg.FileName } catch { Set-Status "Couldn't open $($dlg.FileName)" }
     }
 }
@@ -7785,7 +7879,7 @@ $ui.CmbRecent.Add_SelectionChanged({
         if ($item -and $item.Tag -and $item.Tag -ne $script:ComposePath) {
             if (Test-Path -LiteralPath $item.Tag) { Set-ComposeFile $item.Tag }
             else {
-                [void][Windows.MessageBox]::Show($window, "That compose file isn't there any more:`n$($item.Tag)", $script:AppName, 'OK', 'Warning')
+                [void]$script:MsgBox.InvokeReturnAsIs($window, "That compose file isn't there any more:`n$($item.Tag)", $script:AppName, 'OK', 'Warning')
                 $script:Settings.RecentFiles = @($script:Settings.RecentFiles | Where-Object { $_ -ne $item.Tag })
                 Save-Settings
                 Update-RecentList
@@ -7798,12 +7892,12 @@ $ui.BtnEditEnv.Add_Click({
         $envFile = Get-ConfigureEnvPath
         $em = Get-Machine
         if ($em -and -not $em.EnvFile -and -not (Test-Path -LiteralPath $envFile)) {
-            [void][Windows.MessageBox]::Show($window, "$($em.Name) keeps its own .env in $($em.Folder), and this folder has no .env to open. Change $($em.Name)'s values on the machine, or add new ones with Missing .env values.", $script:AppName, 'OK', 'Information')
+            [void]$script:MsgBox.InvokeReturnAsIs($window, "$($em.Name) keeps its own .env in $($em.Folder), and this folder has no .env to open. Change $($em.Name)'s values on the machine, or add new ones with Missing .env values.", $script:AppName, 'OK', 'Information')
             return
         }
         if ($em -and -not $em.EnvFile) {
             $ask = "$($em.Name) keeps its own .env in $($em.Folder), and this PC's .env is never sent there, so changing this PC's .env doesn't change $($em.Name).`n`nOpen this PC's .env anyway?"
-            if ([Windows.MessageBox]::Show($window, $ask, $script:AppName, 'YesNo', 'Information') -ne 'Yes') { return }
+            if ($script:MsgBox.InvokeReturnAsIs($window, $ask, $script:AppName, 'YesNo', 'Information') -ne 'Yes') { return }
         }
         elseif (-not (Test-Path -LiteralPath $envFile) -and (Test-MasterFolder)) {
             Show-MasterFolder $window
@@ -7811,7 +7905,7 @@ $ui.BtnEditEnv.Add_Click({
         }
         if (-not (Test-Path -LiteralPath $envFile)) {
             if (-not (Confirm-Action "There's no .env next to the compose file. Create an empty one?")) { return }
-            try { [IO.File]::WriteAllText($envFile, '') } catch { [void][Windows.MessageBox]::Show($window, $_.Exception.Message, $script:AppName); return }
+            try { [IO.File]::WriteAllText($envFile, '') } catch { [void]$script:MsgBox.InvokeReturnAsIs($window, $_.Exception.Message, $script:AppName); return }
         }
         Open-InEditor $envFile
     })
@@ -8009,7 +8103,7 @@ $window.Add_StateChanged({
 $window.Add_Closing({
         param($s, $e)
         if ($script:CurrentJob -or $script:JobQueue.Count) {
-            $answer = [Windows.MessageBox]::Show($window, "Docker is still working on: $($script:CurrentJob.Label)`n`nClose anyway? The command is stopped part way.", $script:AppName, 'YesNo', 'Warning')
+            $answer = $script:MsgBox.InvokeReturnAsIs($window, "Docker is still working on: $($script:CurrentJob.Label)`n`nClose anyway? The command is stopped part way.", $script:AppName, 'YesNo', 'Warning')
             if ($answer -ne 'Yes') { $e.Cancel = $true; return }
             Stop-CurrentJob
         }
@@ -8172,7 +8266,7 @@ function Update-MachineList {
 
 function Set-Machine([string]$Name) {
     if ($script:CurrentJob -or $script:JobQueue.Count) {
-        [void][Windows.MessageBox]::Show($window, "Docker is still working on: $($script:CurrentJob.Label)`n`nSwitch machines when it has finished.", $script:AppName, 'OK', 'Information')
+        [void]$script:MsgBox.InvokeReturnAsIs($window, "Docker is still working on: $($script:CurrentJob.Label)`n`nSwitch machines when it has finished.", $script:AppName, 'OK', 'Information')
         Update-MachineList
         return
     }
@@ -8242,7 +8336,7 @@ function Get-SendSteps($Machine) {
     if ($Machine.EnvFile) {
         $envPath = Join-Path $script:ComposeDir $Machine.EnvFile
         if (-not (Test-Path -LiteralPath $envPath)) {
-            [void][Windows.MessageBox]::Show($window, "$($Machine.EnvFile) isn't next to the compose file, so nothing was sent.`n`nCreate it, or pick another Env_ file for $($Machine.Name) in Machines.", $script:AppName, 'OK', 'Warning')
+            [void]$script:MsgBox.InvokeReturnAsIs($window, "$($Machine.EnvFile) isn't next to the compose file, so nothing was sent.`n`nCreate it, or pick another Env_ file for $($Machine.Name) in Machines.", $script:AppName, 'OK', 'Warning')
             return $null
         }
     }
@@ -8518,14 +8612,14 @@ function Save-MissingEnv {
             if ($v -ne '') { [pscustomobject]@{ Name = [string]$n; Value = $v } }
         })
     if (-not $pairs.Count) {
-        [void][Windows.MessageBox]::Show($f.Window, 'Type a value for at least one of them first.', 'Missing .env values', 'OK', 'Information')
+        [void]$script:MsgBox.InvokeReturnAsIs($f.Window, 'Type a value for at least one of them first.', 'Missing .env values', 'OK', 'Information')
         return
     }
     $win = @($pairs | Where-Object { Test-WindowsPathValue $_.Value })
     if ($win.Count) {
         $list = ($win | ForEach-Object { "  $($_.Name)=$($_.Value)" }) -join "`n"
         $ask = "These look like Windows paths, which $($m.Name) can't use:`n`n$list`n`nAdd them anyway?"
-        if ([Windows.MessageBox]::Show($f.Window, $ask, 'Missing .env values', 'YesNo', 'Warning') -ne 'Yes') { return }
+        if ($script:MsgBox.InvokeReturnAsIs($f.Window, $ask, 'Missing .env values', 'YesNo', 'Warning') -ne 'Yes') { return }
     }
     $lines = @($pairs | ForEach-Object { '{0}={1}' -f $_.Name, (Format-EnvFileValue $_.Value) })
     $tmp = Join-Path ([IO.Path]::GetTempPath()) 'Docker Container Manager'
@@ -8941,7 +9035,7 @@ function Show-Machines {
             $all = @($f.List)
             foreach ($m in $all) {
                 $problem = Test-MachineValues $m $all
-                if ($problem) { [void][Windows.MessageBox]::Show($f.Window, $problem, 'Machines', 'OK', 'Warning'); return }
+                if ($problem) { [void]$script:MsgBox.InvokeReturnAsIs($f.Window, $problem, 'Machines', 'OK', 'Warning'); return }
             }
             $old = Get-Machine
             $script:Settings.Machines = @(foreach ($m in $all) { ConvertTo-Machine $m })
