@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.17] - 2026-11-18
+
+### Changed
+- **Help** now covers the v1.15 and v1.16 changes: the Copy buttons in SSH key help, the "can't reach" message when a
+  machine doesn't answer (and why an IP address is often more reliable than a name), the Master folder window that
+  **.env** opens in a master folder, and why the open compose file can't be removed from the list.
+- About > What's new describes it.
+
 ## [1.16] - 2026-11-18
 
 ### Changed

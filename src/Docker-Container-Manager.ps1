@@ -33,7 +33,7 @@
     Opens that compose file.
 
 .NOTES
-    Version:   1.16 (keep in step with CHANGELOG.md)
+    Version:   1.17 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -48,7 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.16'
+$script:AppVersion = '1.17'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 $script:AppId      = 'jason4bury.Docker-Container-Manager'   # taskbar ID, the same as the shortcut's
 
@@ -5830,6 +5830,9 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.17' = @(
+        'Help describes the v1.15 and v1.16 changes: Copy buttons in SSH key help, the "can''t reach" message when a machine doesn''t answer, the Master folder window, and why the open compose file can''t be removed from the list.'
+    )
     '1.16' = @(
         'Message boxes (questions, warnings and notices) now use the app''s own light or dark look instead of the grey Windows box, and their text can be selected and copied.',
         'Compose file list: right-clicking the file that''s open now shows a greyed-out Remove from list that says to switch to another file first, and right-clicking the closed box says to open the list and right-click a file. Before, both did nothing.'
@@ -7556,7 +7559,7 @@ $script:HelpTopics = [ordered]@{
         'Which computer''s Docker the app shows and controls: This PC, or another machine (a Linux laptop, a VM, a Synology NAS) reached over SSH. Machines... in this list adds or changes them.',
         '## Compose file',
         'The compose file on this PC that the app reads (the one in bold). Each machine remembers the file you last used with it.',
-        'Other compose file... at the end of the list picks a file anywhere on this PC (like the Compose file... button). Right-click any other entry for Remove from list; the file itself is never touched.',
+        'Other compose file... at the end of the list picks a file anywhere on this PC (like the Compose file... button). Right-click any other entry for Remove from list; the file itself is never touched. The file that''s open can''t be removed until you switch to another one.',
         'With another machine picked, the box reads Send from: that machine runs its own copy of the file, and the file here is the master copy. Send copies it across.'
     )
     'Groups and labels' = @(
@@ -7600,7 +7603,8 @@ $script:HelpTopics = [ordered]@{
     'Other machines and Send' = @(
         'Pick a machine in Containers on and every docker command runs there over SSH, using that machine''s copy of the compose file.',
         '- Machines... sets the SSH login, the folder with the compose file, the Env_ file to send as .env, and Portainer''s data folder.',
-        '- SSH key help shows the one-time setup; Test connection checks it.',
+        '- SSH key help shows the one-time setup, with a Copy button for each command; Test connection checks it.',
+        '- If a machine doesn''t answer within 2 minutes, the bar at the top says so and what to check (switched on, connected, SSH login right in Machines). The command that timed out is in the Activity log. An IP address in the SSH login is often more reliable than a name.',
         '- Send backs up the files on the machine, then copies your compose file (and the Env_ file as .env) there. Nothing restarts; press Apply changes afterwards.',
         '## Missing .env values',
         'Before the app reads a machine''s compose file, it checks that machine''s .env for every ${NAME} the compose file uses. Variables with a default, such as ${NAME:-x}, don''t count.',
@@ -7609,7 +7613,7 @@ $script:HelpTopics = [ordered]@{
         '- Only new lines are added to the end of the machine''s .env, after a dated .bak copy. Nothing already in it changes, and this PC''s .env is never sent.',
         '- When the machine gets its .env from an Env_ file, the values are filled in from that file and can be added to it too, so the next Send keeps them.',
         '## Master folders',
-        'A folder that keeps Env_ templates (Env_Windows, Env_Synology and so on) and no .env is a master folder: the one you copy to each machine, where one Env_ file becomes that machine''s .env. It never needs a .env of its own, so the app doesn''t warn about one or make one there. Check tests its variables against each Env_ template instead. On This PC its variables are read from Env_Windows (or the first Env_ file if there''s no Env_Windows), without making a .env. Configure shows .env values but only changes them for a machine that gets an Env_ file.',
+        'A folder that keeps Env_ templates (Env_Windows, Env_Synology and so on) and no .env is a master folder: the one you copy to each machine, where one Env_ file becomes that machine''s .env. It never needs a .env of its own, so the app doesn''t warn about one or make one there. Check tests its variables against each Env_ template instead. On This PC its variables are read from Env_Windows (or the first Env_ file if there''s no Env_Windows), without making a .env. Configure shows .env values but only changes them for a machine that gets an Env_ file. The .env button opens the Master folder window, which lists each Env_ template with the machines that use it, an Edit button for each, and Open folder.',
         '## Machines that keep their own .env',
         'With .env comes from set to (leave .env as it is), Send never copies a .env there, so Configure shows that machine''s own .env values (from its last check) read only. Add new ones with Missing .env values, or change them on the machine.',
         '## The usual routine for a NAS',
