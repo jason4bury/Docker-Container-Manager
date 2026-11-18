@@ -33,7 +33,7 @@
     Opens that compose file.
 
 .NOTES
-    Version:   1.13 (keep in step with CHANGELOG.md)
+    Version:   1.14 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -48,7 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.13'
+$script:AppVersion = '1.14'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 $script:AppId      = 'jason4bury.Docker-Container-Manager'   # taskbar ID, the same as the shortcut's
 
@@ -446,6 +446,8 @@ $script:ConfigWanted   = $false
 $script:EnvCheckWanted = $false   # check the machine's .env before its compose file is next read
 $script:EnvMissing     = $null    # @{ Machine; Names; Lines; NoEnv } from the last check
 $script:EnvShown       = @{}      # 'machine|NAME' already shown, so the window doesn't open again for them
+$script:LastEnvShown   = ''       # last 'Variables:' line written to the Activity log
+$script:RemoteEnv      = @{}      # machine name -> its .env values (Name -> @{ Value; Line }) from the last check, for Configure
 $script:EnvCheckForm   = $null
 $script:EnvAddPending  = $null
 $script:ConfigGen      = 0
@@ -600,7 +602,11 @@ function Get-ComposeArguments([switch]$Local) {
         if ($m.Project) { $a += @('-p', $m.Project) }
         return $a
     }
-    return @('compose', '--ansi', 'never', '--progress', 'plain', '-f', $script:ComposePath, '--project-directory', $script:ComposeDir)
+    $a = @('compose', '--ansi', 'never', '--progress', 'plain', '-f', $script:ComposePath, '--project-directory', $script:ComposeDir)
+    # A master folder has no .env, so on This PC its variables come from its Windows template (read only).
+    $tpl = Get-MasterEnvFile
+    if ($tpl) { $a += @('--env-file', $tpl) }
+    return $a
 }
 
 # Starts docker here, or over ssh on the chosen machine. CommandLine always
@@ -1093,7 +1099,7 @@ $mainXaml = @'
                 <StackPanel x:Name="HeaderTitle" Grid.Column="1" VerticalAlignment="Center" Margin="0,0,16,0">
                     <TextBlock Text="Docker Container Manager" FontSize="20" FontWeight="SemiBold" Foreground="#FFFFFF"/>
                     <TextBlock x:Name="TxtSubtitle" Foreground="#CFE0F5" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" MaxWidth="420" HorizontalAlignment="Left"/>
-                    <TextBlock x:Name="TxtProject" Foreground="#CFE0F5" TextTrimming="CharacterEllipsis" MaxWidth="420" HorizontalAlignment="Left"/>
+                    <TextBlock x:Name="TxtProject" Foreground="#CFE0F5" TextTrimming="CharacterEllipsis" MaxWidth="520" HorizontalAlignment="Left"/>
                 </StackPanel>
                 <!-- The buttons wrap onto a second line when the window is narrow, so the title is never cut off. -->
                 <WrapPanel x:Name="HeaderButtons" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
@@ -1112,6 +1118,14 @@ $mainXaml = @'
                         </StackPanel>
                         <Button x:Name="BtnSend" Content="Send" Tag="&#xE898;" Style="{DynamicResource HeaderBtn}" Visibility="Collapsed" Margin="6,3,0,3"
                                 ToolTip="Copy the compose file and this machine's Env_ file (as .env) to the machine"/>
+                        <!-- Which file the compose file's variables come from. Click to open it (like the .env button). -->
+                        <StackPanel Margin="6,0,0,0" VerticalAlignment="Bottom">
+                            <TextBlock Text="Variables from" FontSize="11" Foreground="#CFE0F5" Margin="2,0,0,0"/>
+                            <Border x:Name="BdEnvFile" Width="200" Margin="0,2,0,3" Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}"
+                                    BorderThickness="1" CornerRadius="4" Cursor="Hand" Height="{Binding ActualHeight, ElementName=CmbRecent}">
+                                <TextBlock x:Name="TxtEnvFile" Margin="8,0,8,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{StaticResource Ink}"/>
+                            </Border>
+                        </StackPanel>
                     </StackPanel>
                     <Button x:Name="BtnBrowse" Content="Compose file..." Tag="&#xE8E5;" Style="{DynamicResource HeaderBtn}"
                             ToolTip="Choose a docker-compose.yml"/>
@@ -1143,7 +1157,6 @@ $mainXaml = @'
                 <TextBlock x:Name="BannerGlyph" FontFamily="Segoe MDL2 Assets" Text="&#xE7BA;" FontSize="16" VerticalAlignment="Center" Margin="0,0,10,0"/>
                 <TextBlock x:Name="BannerText" Grid.Column="1" TextWrapping="Wrap" VerticalAlignment="Center"/>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                    <ComboBox x:Name="CmbEnvTemplate" Width="150" Margin="0,0,6,0" Visibility="Collapsed"/>
                     <Button x:Name="BannerAction" Style="{DynamicResource PrimaryBtn}" Visibility="Collapsed"/>
                     <Button x:Name="BannerRetry" Content="Try again" Tag="&#xE72C;" Style="{DynamicResource Btn}" Margin="0"/>
                 </StackPanel>
@@ -1626,8 +1639,8 @@ $mainXaml = @'
 
 $window = New-XamlObject $mainXaml
 $ui = @{}
-foreach ($name in 'ImgLogo', 'HeaderTitle', 'HeaderButtons', 'TxtSubtitle', 'TxtProject', 'CmbMachine', 'BtnSend', 'CmbRecent', 'PnlRecent', 'TxtRecentCaption', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnDisk', 'BtnFolder', 'BtnSettings', 'BtnHelp', 'BtnAbout',
-    'Banner', 'BannerGlyph', 'BannerText', 'CmbEnvTemplate', 'BannerAction', 'BannerRetry',
+foreach ($name in 'ImgLogo', 'HeaderTitle', 'HeaderButtons', 'TxtSubtitle', 'TxtProject', 'CmbMachine', 'BtnSend', 'BdEnvFile', 'TxtEnvFile', 'CmbRecent', 'PnlRecent', 'TxtRecentCaption', 'BtnBrowse', 'BtnEditCompose', 'BtnEditEnv', 'BtnCheck', 'BtnDisk', 'BtnFolder', 'BtnSettings', 'BtnHelp', 'BtnAbout',
+    'Banner', 'BannerGlyph', 'BannerText', 'BannerAction', 'BannerRetry',
     'LstGroups', 'TxtSearch', 'SearchHint', 'CmbState', 'BtnView', 'BtnPortainer', 'BtnStart', 'BtnStop', 'BtnRestart', 'BtnUpdate', 'BtnConfigure', 'BtnLogs', 'BtnSource', 'BtnOpen',
     'TxtGroupName', 'TxtGroupInfo', 'BtnAutoGroup', 'BtnApply', 'BtnGroupStart', 'BtnGroupStop', 'BtnGroupUpdate', 'BtnRemoveOrphans', 'BtnCheckUpdates', 'BtnExport', 'BtnRefresh',
     'Grid', 'Cards', 'TxtEmpty', 'RowMenu', 'MnuStart', 'MnuStop', 'MnuRestart', 'MnuUpdate', 'MnuRecreate', 'MnuConfigure', 'MnuLogs', 'MnuOpen', 'MnuSource', 'MnuCopy', 'MnuSourceList', 'MnuRemove',
@@ -1664,7 +1677,7 @@ function Write-Trace([string]$Text) { if ($script:Trace) { Write-Activity "trace
 
 # Kind: info | warn | error. Action: $null or @{ Text; Glyph; Click = scriptblock }
 function Show-Banner {
-    param([string]$Kind, [string]$Text, [hashtable]$Action, [switch]$EnvPicker)
+    param([string]$Kind, [string]$Text, [hashtable]$Action)
     $p = $script:Pal
     $colours = @{ info = @($p.InfoBg, $p.InfoEdge, [char]0xE946); warn = @($p.WarnBg, $p.WarnEdge, [char]0xE7BA); error = @($p.ErrorBg, $p.ErrorEdge, [char]0xEA39) }
     $c = $colours[$Kind]
@@ -1681,11 +1694,40 @@ function Show-Banner {
     } else {
         $ui.BannerAction.Visibility = 'Collapsed'
     }
-    $ui.CmbEnvTemplate.Visibility = if ($EnvPicker) { 'Visible' } else { 'Collapsed' }
     $ui.Banner.Visibility = 'Visible'
 }
 
 function Hide-Banner { $ui.Banner.Visibility = 'Collapsed'; $script:BannerKind = '' }
+
+# A master folder holds Env_ templates and no .env, for example the folder whose files are copied to
+# each machine (where one Env_ file is renamed to .env). It never needs a .env of its own, so the app
+# doesn't ask for one, make one or warn that it's missing.
+function Test-MasterFolder([string]$Dir = $script:ComposeDir) {
+    if (-not $Dir -or (Test-Path -LiteralPath (Join-Path $Dir '.env'))) { return $false }
+    return (@(Get-ChildItem -LiteralPath $Dir -Filter 'Env_*' -File -ErrorAction SilentlyContinue).Count -gt 0)
+}
+
+# Why .env values can't be changed from this PC, or '' when they can. They can when the picked
+# machine gets an Env_ file (it's saved there and Send copies it), or on This PC in a folder with
+# a real .env. A machine that keeps its own .env never gets one from here, and a master folder has none.
+function Get-NoEnvTargetReason {
+    $m = Get-Machine
+    if ($m -and $m.EnvFile) { return '' }
+    if ($m) { return "$($m.Name) keeps its own .env (Send doesn't copy one there), so its .env values can't be changed from here. Missing .env values adds new ones to it." }
+    if (Test-MasterFolder) { return "This is a master folder (Env_ templates, no .env), so .env values can't be changed here. Pick a machine that gets an Env_ file, or open the compose file in the folder that has the real .env." }
+    return ''
+}
+
+function Test-NoEnvTarget { return [bool](Get-NoEnvTargetReason) }
+
+# The Env_ file This PC reads a master folder's variables from: Env_Windows if there is one, otherwise
+# the first Env_ file by name. '' when the folder isn't a master folder. Only read, never copied to .env.
+function Get-MasterEnvFile([string]$Dir = $script:ComposeDir) {
+    if (-not (Test-MasterFolder $Dir)) { return '' }
+    $t = @(Get-ChildItem -LiteralPath $Dir -Filter 'Env_*' -File -ErrorAction SilentlyContinue | Sort-Object Name)
+    $win = @($t | Where-Object Name -eq 'Env_Windows')
+    return $(if ($win.Count) { $win[0].FullName } else { $t[0].FullName })
+}
 
 # One place decides which banner shows, most important first.
 function Update-Banner {
@@ -1735,21 +1777,10 @@ function Update-Banner {
         Show-Banner -Kind warn -Text "Docker isn't running, so the status below may be out of date. Start Docker, and the list catches up on its own." -Action $action
         return
     }
-    $envPath = Join-Path $script:ComposeDir '.env'
-    $templates = @(Get-ChildItem -LiteralPath $script:ComposeDir -Filter 'Env_*' -File -ErrorAction SilentlyContinue)
     if ($script:ConfigError) {
-        $extra = if (-not (Test-Path -LiteralPath $envPath) -and $templates.Count) { ' There is no .env here yet, which may be why.' } else { '' }
+        $extra = if (Test-MasterFolder) { " This is a master folder (Env_ templates, no .env), so on This PC its variables are read from $([IO.Path]::GetFileName((Get-MasterEnvFile)))." } else { '' }
         Show-Banner -Kind error -Text ("The compose file has a problem, so the list shows the last version that worked. Docker says: " + $script:ConfigError + $extra) `
             -Action @{ Text = 'Edit compose file'; Glyph = [string][char]0xE70F; Click = { Open-InEditor $script:ComposePath } }
-        return
-    }
-    if (-not (Test-Path -LiteralPath $envPath) -and $templates.Count) {
-        $ui.CmbEnvTemplate.Items.Clear()
-        foreach ($t in $templates) { [void]$ui.CmbEnvTemplate.Items.Add($t.Name) }
-        $pick = @($templates | Where-Object Name -eq 'Env_Windows')
-        $ui.CmbEnvTemplate.SelectedItem = if ($pick.Count) { 'Env_Windows' } else { $templates[0].Name }
-        Show-Banner -Kind warn -Text 'This folder has no .env file yet, only templates. Pick the one for this machine to copy it to .env.' -EnvPicker `
-            -Action @{ Text = 'Create .env'; Glyph = [string][char]0xE710; Click = { New-EnvFromTemplate } }
         return
     }
     Hide-Banner
@@ -1764,20 +1795,6 @@ function Start-DockerDesktop {
         Set-Status 'Starting Docker Desktop. This can take a minute.'
     } catch {
         Write-Activity "Couldn't start Docker Desktop: $($_.Exception.Message)"
-    }
-}
-
-function New-EnvFromTemplate {
-    $name = [string]$ui.CmbEnvTemplate.SelectedItem
-    if (-not $name) { return }
-    $target = Join-Path $script:ComposeDir '.env'
-    if (Test-Path -LiteralPath $target) { Update-Banner; return }
-    try {
-        Copy-Item -LiteralPath (Join-Path $script:ComposeDir $name) -Destination $target
-        Write-Activity "Copied $name to .env"
-        Request-ConfigLoad
-    } catch {
-        [void][Windows.MessageBox]::Show($window, "Couldn't create .env: $($_.Exception.Message)", $script:AppName, 'OK', 'Error')
     }
 }
 
@@ -1890,6 +1907,15 @@ function Test-ComposeFile([string]$Path, [string]$Prefix = 'home') {
     $vars = Read-EnvFile $envPath
     $hasEnv = $null -ne $vars
     if (-not $hasEnv) { $vars = @{} }
+    # A master folder has no .env, so its variables are checked against each Env_ template instead.
+    $templates = [ordered]@{}
+    if (-not $hasEnv -and (Test-MasterFolder (Split-Path -Parent $Path))) {
+        foreach ($t in @(Get-ChildItem -LiteralPath (Split-Path -Parent $Path) -Filter 'Env_*' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+            $tv = Read-EnvFile $t.FullName
+            $templates[$t.Name] = if ($tv) { $tv } else { @{} }
+        }
+    }
+    $templateSeen = @{}
     $groupLabel = "$Prefix.group"
     $lines = [IO.File]::ReadAllLines($Path)
 
@@ -1941,6 +1967,18 @@ function Test-ComposeFile([string]$Path, [string]$Prefix = 'home') {
                 $vn = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[3].Value }
                 if (-not $m.Groups[2].Success -and -not $vars.ContainsKey($vn) -and $null -eq [Environment]::GetEnvironmentVariable($vn)) {
                     & $add 'Warning' $i $svc 'Variables' ("'{0}' isn't set in .env, so it becomes empty." -f $vn)
+                }
+            }
+        } elseif ($templates.Count) {
+            foreach ($m in [regex]::Matches($body, '(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?+][^}]*)?\}|(?<!\$)\$([A-Za-z_][A-Za-z0-9_]*)')) {
+                $vn = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[3].Value }
+                if ($m.Groups[2].Success -or $templateSeen.ContainsKey($vn)) { continue }
+                $templateSeen[$vn] = $true
+                $lacking = @($templates.Keys | Where-Object { -not $templates[$_].ContainsKey($vn) })
+                if ($lacking.Count -eq $templates.Count) {
+                    & $add 'Warning' $i $svc 'Variables' ("'{0}' isn't in any Env_ template, so it's empty on every machine that gets its .env from one." -f $vn)
+                } elseif ($lacking.Count) {
+                    & $add 'Warning' $i $svc 'Variables' ("'{0}' isn't set in {1}, so it's empty on the machine that gets its .env from it." -f $vn, ($lacking -join ', '))
                 }
             }
         }
@@ -2111,7 +2149,13 @@ function Test-ComposeFile([string]$Path, [string]$Prefix = 'home') {
             }
         }
     }
-    if (-not $hasEnv) { & $add 'Info' 0 '' 'Variables' "There's no .env next to the compose file, so variables weren't checked." }
+    if (-not $hasEnv) {
+        if (Test-MasterFolder (Split-Path -Parent $Path)) {
+            & $add 'Info' 0 '' 'Variables' ("This is a master folder (Env_ templates and no .env, which is fine), so variables were checked against each template: {0}." -f (@($templates.Keys) -join ', '))
+        } else {
+            & $add 'Info' 0 '' 'Variables' "There's no .env next to the compose file, so variables weren't checked."
+        }
+    }
 
     $order = @{ Error = 0; Warning = 1; Info = 2 }
     return @($found | Sort-Object @{ Expression = { $order[$_.Severity] } }, Line)
@@ -2243,11 +2287,14 @@ function Find-ServiceEnv($Lines, [string]$Service) {
 
 function Get-EnvFileValues([string]$Path) {
     # Name -> @{ Value; Line } for a .env-style file (keeps the first definition, like Compose).
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return @{} }
+    return (ConvertFrom-EnvLines @((Read-TextFile $Path).Lines))
+}
+
+function ConvertFrom-EnvLines([string[]]$Lines) {
     $map = @{}
-    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $map }
-    $f = Read-TextFile $Path
-    for ($i = 0; $i -lt $f.Lines.Count; $i++) {
-        if ($f.Lines[$i] -match '^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match '^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
             if ($map.ContainsKey($Matches[1])) { continue }
             $v = $Matches[2].Trim()
             if ($v.Length -ge 2 -and $v[0] -eq "'" -and $v[-1] -eq "'") { $v = $v.Substring(1, $v.Length - 2) }
@@ -2409,6 +2456,7 @@ function Set-ComposeFile([string]$Path) {
     $ui.TxtSubtitle.Text = Get-ComposeDisplay
     $ui.TxtSubtitle.ToolTip = $ui.TxtSubtitle.Text
     $ui.TxtProject.Text = ''
+    Update-EnvFileBox
     Write-Activity "Compose file: $full"
     Request-ConfigLoad
 }
@@ -2417,6 +2465,26 @@ function Get-ComposeDisplay {
     $m = Get-Machine
     if ($m) { return ('{0}: {1}' -f $m.Name, (Get-RemoteComposePath $m)) }
     return $script:ComposePath
+}
+
+# The Variables from box next to the compose file, the .env button's tooltip and one Activity line when it changes.
+function Update-EnvFileBox {
+    $envShown = if ($script:ComposePath) { Get-EnvDisplay } else { '' }
+    $ui.TxtEnvFile.Text = $envShown
+    $ui.BdEnvFile.ToolTip = if ($envShown) { "The compose file's `${...} variables come from $envShown. Click to open it." } else { 'Choose a compose file first' }
+    $ui.BtnEditEnv.ToolTip = if ($envShown) { "Open the file the variables come from: $envShown" } else { 'Open the .env file next to the compose file' }
+    if ($envShown -and $envShown -ne $script:LastEnvShown) { Write-Activity "Variables: $envShown"; $script:LastEnvShown = $envShown }
+}
+
+# Which file the compose file's variables come from, for the header and the .env button.
+function Get-EnvDisplay {
+    $m = Get-Machine
+    if ($m -and $m.EnvFile) { return "$($m.EnvFile) (sent as .env)" }
+    if ($m) { return ".env on $($m.Name)" }
+    $tpl = Get-MasterEnvFile
+    if ($tpl) { return "$([IO.Path]::GetFileName($tpl)) (master folder)" }
+    if ($script:ComposeDir -and (Test-Path -LiteralPath (Join-Path $script:ComposeDir '.env'))) { return '.env' }
+    return 'no .env'
 }
 
 function Get-FileStamp {
@@ -2466,7 +2534,10 @@ function Start-ConfigLoad {
         }
         if ($res.ExitCode -ne 0) {
             $script:ConfigLoading = $false
-            $msg = Get-FirstLines $res.Error 4
+            # Compose prints a warning for every unset variable first; leave those out so the real error shows.
+            $errText = (@(($res.Error -split "`r?`n") | Where-Object { $_ -notmatch 'variable is not set' }) -join "`n")
+            $msg = Get-FirstLines $errText 4
+            if (-not $msg) { $msg = Get-FirstLines $res.Error 4 }
             if (-not $msg) { $msg = "docker compose config exited with code $($res.ExitCode)." }
             if (Test-DockerDownMessage $msg) { $msg = "Docker couldn't be reached: $msg" }
             $script:ConfigError = $msg
@@ -2635,6 +2706,7 @@ function Import-ComposeConfig($Config, [hashtable]$Hashes) {
     $ui.TxtSubtitle.Text = Get-ComposeDisplay
     $ui.TxtSubtitle.ToolTip = $ui.TxtSubtitle.Text
     $ui.TxtProject.Text = "Project $script:ProjectName   ·   $count services"
+    Update-EnvFileBox
     Update-Banner
     Update-Groups
     Update-View -Refilter
@@ -4774,7 +4846,15 @@ function Get-ConfigureEnvPath {
 function Import-ConfigureEntries($State) {
     $compose = Read-TextFile $script:ComposePath
     $info = Find-ServiceEnv $compose.Lines $State.Service
-    $envVals = Get-EnvFileValues (Get-ConfigureEnvPath)
+    $reason = Get-NoEnvTargetReason
+    $noTarget = [bool]$reason
+    $m = Get-Machine
+    # A machine that keeps its own .env: show its values from the last check (never this PC's .env).
+    $remoteVals = $m -and -not $m.EnvFile -and $script:RemoteEnv.ContainsKey($m.Name)
+    $masterTpl = if (-not $m) { Get-MasterEnvFile } else { '' }
+    $envVals = if ($m -and -not $m.EnvFile) { if ($remoteVals) { $script:RemoteEnv[$m.Name] } else { @{} } }
+    elseif ($masterTpl) { Get-EnvFileValues $masterTpl }
+    else { Get-EnvFileValues (Get-ConfigureEnvPath) }
     $State.Entries.Clear()
     $State.Info = $info
     $State.Stamp = Get-FileStamp
@@ -4789,11 +4869,11 @@ function Import-ConfigureEntries($State) {
         $x.Secret = ($e.Name -match $script:SecretNamePattern) -or ($var -and $var -match $script:SecretNamePattern)
         if ($var) {
             $x.VarName = $var
-            $x.Editable = $true
+            $x.Editable = -not $noTarget
             $uses = Get-VarUseCount $compose.Lines $var
             $x.From = if ($uses -gt 1) { '.env: {0} (used {1} times)' -f $var, $uses } else { '.env: ' + $var }
             $x.Original = if ($envVals.ContainsKey($var)) { $envVals[$var].Value } else { '' }
-            $x.Missing = -not $envVals.ContainsKey($var)
+            $x.Missing = (-not $noTarget -or $remoteVals -or $masterTpl) -and -not $envVals.ContainsKey($var)
         } elseif ($null -eq $e.Raw) {
             $x.From = "This PC's environment"
             $x.Original = [string][Environment]::GetEnvironmentVariable($e.Name)
@@ -4818,9 +4898,14 @@ function Import-ConfigureEntries($State) {
         $files = @($info.EnvFiles | ForEach-Object { Resolve-ComposeVars $_ (Get-EnvTable $envVals) })
         $notes += 'It also reads variables from ' + ($files -join ', ') + ' (open that file to change them).'
     }
-    if (-not (Test-Path -LiteralPath (Get-ConfigureEnvPath))) { $notes += "There's no $([IO.Path]::GetFileName((Get-ConfigureEnvPath))) yet; saving creates one." }
-    $m = Get-Machine
-    if ($m) { $notes += "Values are saved in $([IO.Path]::GetFileName((Get-ConfigureEnvPath))) on this PC. Save and recreate sends it to $($m.Name) first." }
+    if ($noTarget) {
+        $notes += $reason
+        if ($remoteVals) { $notes += "The values shown are from the .env on $($m.Name) when it was last checked." }
+        elseif ($masterTpl) { $notes += "The values shown are from $([IO.Path]::GetFileName($masterTpl)), which This PC reads them from." }
+        elseif ($m) { $notes += "Its values aren't known yet (they're read when the machine is checked)." }
+    }
+    elseif (-not (Test-Path -LiteralPath (Get-ConfigureEnvPath))) { $notes += "There's no $([IO.Path]::GetFileName((Get-ConfigureEnvPath))) yet; saving creates one." }
+    if ($m -and -not $noTarget) { $notes += "Values are saved in $([IO.Path]::GetFileName((Get-ConfigureEnvPath))) on this PC. Save and recreate sends it to $($m.Name) first." }
     $State.Status.Text = ($notes -join '  ')
 }
 
@@ -4847,11 +4932,16 @@ function Show-ConfigureEntry($State) {
         $State.ValueBox.IsReadOnly = -not $editable
         $State.PwdBox.IsEnabled = $editable
         $State.SetBtn.IsEnabled = $editable
-        $State.MoveBtn.IsEnabled = $has -and $x.Literal -and -not $x.MoveToEnv
+        $State.MoveBtn.IsEnabled = $has -and $x.Literal -and -not $x.MoveToEnv -and -not (Test-NoEnvTarget)
         $State.UndoBtn.IsEnabled = $has -and ($x.Status -ne '')
         $State.FromText.Text = if (-not $has) { 'Pick a variable above, or press Add variable.' }
         elseif ($x.IsNew) { 'New variable. Its value is saved in .env and the compose file gets a ${NAME} reference to it.' }
         elseif ($x.MoveToEnv) { 'The value moves to .env when you save, and the compose file gets a ${NAME} reference instead.' }
+        elseif ($x.VarName -and -not $x.Editable) {
+            $t = 'Comes from .env as {0}. ' -f $x.VarName
+            if ($x.Missing) { $t += "It isn't in that .env, so the container gets an empty value. " }
+            $t + (Get-NoEnvTargetReason)
+        }
         elseif ($x.VarName) {
             $t = 'Saved in .env as {0}.' -f $x.VarName
             if ($x.Missing) { $t += " It isn't in .env yet, so the container gets an empty value." }
@@ -4916,6 +5006,11 @@ function Save-ConfigureEntries($State, [switch]$Recreate) {
             [void][Windows.MessageBox]::Show($State.Window, "The compose file doesn't match what this window read any more, so nothing was saved. Press Reload.", $script:AppName, 'OK', 'Warning')
             return
         }
+    }
+    $why = Get-NoEnvTargetReason
+    if ($why -and @($changed | Where-Object { $_.IsNew -or $_.VarName -or $_.MoveToEnv }).Count) {
+        [void][Windows.MessageBox]::Show($State.Window, "Nothing was saved, because some of the changes belong in .env.`n`n$why", $script:AppName, 'OK', 'Information')
+        return
     }
     $envPath = Get-ConfigureEnvPath
     $envExists = Test-Path -LiteralPath $envPath
@@ -5109,6 +5204,11 @@ function Show-Configure([Dcm.Row]$Row) {
         })
     $state.AddBtn.Add_Click({
             $s = $this.DataContext
+            $why = Get-NoEnvTargetReason
+            if ($why) {
+                [void][Windows.MessageBox]::Show($s.Window, "A new variable's value goes in .env.`n`n$why", $script:AppName, 'OK', 'Information')
+                return
+            }
             $x = New-Object Dcm.EnvEntry
             $x.Name = 'NEW_VARIABLE'; $x.IsNew = $true; $x.Editable = $true; $x.From = '.env (when saved)'; $x.Line = -1
             $x.Reveal = [bool]$s.Reveal.IsChecked
@@ -5610,6 +5710,11 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.14' = @(
+        'Master folders: a compose folder that keeps Env_ templates and no .env (the one you copy to each machine) no longer gets a "no .env yet" warning, a Create .env button or an offer to make an empty .env, and Configure never makes a .env there. On This PC its variables are read from Env_Windows, so the compose file loads.',
+        'Check compose file in a master folder checks the variables against each Env_ template, and warns about one a template doesn''t set.',
+        'Machines that keep their own .env: Configure shows that machine''s .env values (from its last check) instead of this PC''s, read only, because this PC''s .env is never sent there. The .env button says so before opening this PC''s .env.'
+    )
     '1.13' = @(
         'Missing .env values: before reading another machine''s compose file, the app checks that machine''s .env for every ${NAME} the compose file uses, lists any that are missing and lets you add a value for that machine. Only new lines are added; the rest of its .env is left alone and this PC''s .env is never sent.'
     )
@@ -7374,6 +7479,10 @@ $script:HelpTopics = [ordered]@{
         '- Type the value that machine should use (a path as the machine sees it, such as /volume1/music) and press Add to .env. Empty boxes are skipped.',
         '- Only new lines are added to the end of the machine''s .env, after a dated .bak copy. Nothing already in it changes, and this PC''s .env is never sent.',
         '- When the machine gets its .env from an Env_ file, the values are filled in from that file and can be added to it too, so the next Send keeps them.',
+        '## Master folders',
+        'A folder that keeps Env_ templates (Env_Windows, Env_Synology and so on) and no .env is a master folder: the one you copy to each machine, where one Env_ file becomes that machine''s .env. It never needs a .env of its own, so the app doesn''t warn about one or make one there. Check tests its variables against each Env_ template instead. On This PC its variables are read from Env_Windows (or the first Env_ file if there''s no Env_Windows), without making a .env. Configure shows .env values but only changes them for a machine that gets an Env_ file.',
+        '## Machines that keep their own .env',
+        'With .env comes from set to (leave .env as it is), Send never copies a .env there, so Configure shows that machine''s own .env values (from its last check) read only. Add new ones with Missing .env values, or change them on the machine.',
         '## The usual routine for a NAS',
         '- Pick the NAS in Containers on.',
         '- Edit the master copy on this PC (Edit, or Configure).',
@@ -7382,6 +7491,7 @@ $script:HelpTopics = [ordered]@{
     'Configure' = @(
         'Configure (Ctrl+E) shows a container''s settings from the compose file and .env: environment variables, API keys and passwords.',
         '- Change a value and press Save, or Save and recreate to use it straight away.',
+        '- .env values are saved in .env on This PC, or in the picked machine''s Env_ file. In a master folder, or for a machine that keeps its own .env, they''re read only.',
         '- Values written in the compose file can be moved to .env, which is the safer place for passwords.',
         '- It also opens the container''s host folders, a shell inside it, its web page and its logs.',
         'Both files are backed up before anything is saved.'
@@ -7651,12 +7761,28 @@ $ui.BtnEditCompose.Add_Click({ Open-InEditor $script:ComposePath })
 $ui.BtnEditEnv.Add_Click({
         if (-not $script:ComposeDir) { return }
         $envFile = Get-ConfigureEnvPath
+        $em = Get-Machine
+        if ($em -and -not $em.EnvFile -and -not (Test-Path -LiteralPath $envFile)) {
+            [void][Windows.MessageBox]::Show($window, "$($em.Name) keeps its own .env in $($em.Folder), and this folder has no .env to open. Change $($em.Name)'s values on the machine, or add new ones with Missing .env values.", $script:AppName, 'OK', 'Information')
+            return
+        }
+        if ($em -and -not $em.EnvFile) {
+            $ask = "$($em.Name) keeps its own .env in $($em.Folder), and this PC's .env is never sent there, so changing this PC's .env doesn't change $($em.Name).`n`nOpen this PC's .env anyway?"
+            if ([Windows.MessageBox]::Show($window, $ask, $script:AppName, 'YesNo', 'Information') -ne 'Yes') { return }
+        }
+        elseif (-not (Test-Path -LiteralPath $envFile) -and (Test-MasterFolder)) {
+            $names = @(Get-ChildItem -LiteralPath $script:ComposeDir -Filter 'Env_*' -File -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', '
+            $ask = "This is a master folder: it keeps Env_ templates ($names) and no .env, and doesn't need one. Each machine gets its .env from one of them.`n`nOpen the folder to edit a template?"
+            if ([Windows.MessageBox]::Show($window, $ask, $script:AppName, 'YesNo', 'Information') -eq 'Yes') { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$script:ComposeDir`"" }
+            return
+        }
         if (-not (Test-Path -LiteralPath $envFile)) {
             if (-not (Confirm-Action "There's no .env next to the compose file. Create an empty one?")) { return }
             try { [IO.File]::WriteAllText($envFile, '') } catch { [void][Windows.MessageBox]::Show($window, $_.Exception.Message, $script:AppName); return }
         }
         Open-InEditor $envFile
     })
+$ui.BdEnvFile.Add_MouseLeftButtonUp({ $ui.BtnEditEnv.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
 $ui.BtnFolder.Add_Click({ if ($script:ComposeDir -and (Test-Path -LiteralPath $script:ComposeDir)) { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$script:ComposeDir`"" } })
 $ui.BtnSend.Add_Click({ Invoke-SendToMachine })
 $ui.CmbMachine.Add_SelectionChanged({
@@ -8051,6 +8177,7 @@ function Set-Machine([string]$Name) {
     $m = Get-Machine
     Write-Activity $(if ($m) { "Machine: $($m.Name) ($($m.Login), folder $($m.Folder))" } else { 'Machine: This PC' })
     if ($script:ComposePath) { $ui.TxtSubtitle.Text = Get-ComposeDisplay; $ui.TxtSubtitle.ToolTip = $ui.TxtSubtitle.Text; $ui.TxtProject.Text = '' }
+    Update-EnvFileBox
     Update-RecentList
     Update-Banner
     Update-Groups
@@ -8201,6 +8328,7 @@ function Complete-RemoteEnvCheck($Res, $Tag) {
     $envText = $out.Substring($a + $script:EnvMark.Length, $b - $a - $script:EnvMark.Length)
     $noEnv = $envText.Contains($script:EnvNoFile)
     $have = Get-EnvTextNames $envText
+    $script:RemoteEnv[$m.Name] = if ($noEnv) { @{} } else { ConvertFrom-EnvLines ($envText -split "`r?`n") }
     foreach ($n in (Get-EnvTextNames $out.Substring($b + $script:EnvShellMark.Length))) { [void]$have.Add($n) }
     $uses = Get-ComposeVarUses $composeText
     $missing = @($uses.Keys | Where-Object { -not $have.Contains([string]$_) })

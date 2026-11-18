@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.13-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.14-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -27,7 +27,7 @@ A PowerShell/WPF front end for `docker compose`, made for compose files with doz
 - **Progress window** while containers start, stop or update, with Docker's output as it happens. It closes itself 10 seconds after the work succeeds, counting down on its Close button.
 - **Finished box**: if you pressed **Hide** on the progress window (or turned it off), a box in the bottom-right corner says when Docker has finished. Success closes itself after 10 seconds; a failure shows what Docker said, with **Show log**, and stays until closed.
 - **Tray icon** with Start and Stop for each group.
-- **Helpful banners** when Docker isn't running (with **Start Docker Desktop**), when the compose file has an error (the last good list stays), or when a folder has `Env_*` templates but no `.env` yet.
+- **Helpful banners** when Docker isn't running (with **Start Docker Desktop**), when the compose file has an error (the last good list stays), or when another machine's `.env` is missing a value. A master folder (`Env_*` templates and no `.env`) is never asked for a `.env`.
 - **Configure** a container: change its environment variables, API keys and passwords, move values written in the compose file into `.env`, add new variables, and open its host folders, a shell inside it, its web page or logs. **Save and recreate** restarts it with the new values.
 - **Check for updates**: shows which containers have a newer image on Docker Hub, GHCR, lscr.io and other registries, without downloading anything. It also checks on its own when the app starts (at most every 12 hours).
 - **Disk usage**: how much space images, containers, volumes and the build cache take, which containers use each image, and a small clean-up button in each card next to the space it frees (old or unused images, the build cache, unused networks and, in red, after listing them and asking twice, unused volumes). Each button is off when there's nothing to free, and its tooltip says exactly what it runs.
@@ -57,7 +57,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-1. Download `Docker-Container-Manager-v1.13.zip` from the [latest release](../../releases/latest) and unzip it wherever you like to keep it.
+1. Download `Docker-Container-Manager-v1.14.zip` from the [latest release](../../releases/latest) and unzip it wherever you like to keep it.
 2. Double-click **Docker Container Manager.cmd** in the unzipped folder. It makes a **Docker Container Manager** shortcut there and in the Start menu, and starts the app. From then on, use the shortcut, the Start menu or a pinned taskbar button.
 
 Nothing is installed and no Windows settings are changed. The shortcut runs the script with PowerShell's execution policy bypassed for that run only. If the app doesn't open, run `"Docker Container Manager.cmd" debug` from a command prompt to start it in that window and see any errors.
@@ -192,7 +192,7 @@ The app uses Windows' own `ssh.exe` with an SSH key, so it never asks for or sto
 With a machine picked, every docker command (status, start, stop, update, logs, shell, disk usage) runs on that machine, against the compose file in its folder. The compose file on this PC stays the master:
 
 - **Send** backs up the compose file and `.env` on the machine (as dated `.bak` copies), then copies your compose file and the machine's `Env_` file there. Nothing is restarted; services whose settings changed show **Changed**, and **Apply changes** recreates them.
-- **Configure** saves values to the machine's `Env_` file on this PC, and **Save and recreate** sends it before recreating.
+- **Configure** saves values to the machine's `Env_` file on this PC, and **Save and recreate** sends it before recreating. For a machine that keeps its own `.env`, they're read only (see below).
 - **Tidy spacing** and **Check** work on the file on this PC.
 
 #### Missing .env values
@@ -204,6 +204,20 @@ If any are missing, a **Missing .env values** window lists them, with the line e
 - Type the value that machine should use, such as `/volume1/music`, and press **Add to .env on <machine>**. Empty boxes are skipped.
 - Only new lines are added to the end of the machine's `.env`, after a dated `.bak` copy of it. Nothing already in it changes, and this PC's `.env` is never sent.
 - When the machine gets its `.env` from an `Env_` file, the values are filled in from that file, and **Also add them to Env_... on this PC** (on by default) adds them there too, so the next **Send** keeps them.
+
+#### Master folders
+
+A folder that keeps `Env_` templates (`Env_Windows`, `Env_Synology` and so on) and no `.env` is a **master folder**: the one you copy to each machine, where one `Env_` file is renamed to that machine's `.env`. It never needs a `.env` of its own, so the app doesn't warn that one is missing, offer to make one or make one:
+
+- **Check** tests the variables against each `Env_` template instead, and warns about one that a template doesn't set (for example `MP3_ARTIST_PICS` missing from `Env_Synology`) or that no template sets.
+- **.env** in the header offers to open the folder, so you can edit a template.
+- **Configure** shows `.env` values but only changes them for a machine that gets an `Env_` file (they're saved in that file). On **This PC**, or for a machine that keeps its own `.env`, they're read only. Values written in the compose file can still be changed.
+- **Variables from**, next to the compose file box, shows where the variables come from (click it to open that file; for example **Env_Windows (master folder)**, **.env**, **Env_Synology (sent as .env)** or **.env on NAS**).
+- On **This PC** the variables are read from `Env_Windows` (or the first `Env_` file if there's no `Env_Windows`), passed to Docker with `--env-file`, so the compose file loads without a `.env` being made.
+
+#### Machines that keep their own .env
+
+When a machine's **.env comes from** is *(leave .env as it is)*, **Send** never copies a `.env` there, so changing this PC's `.env` doesn't change that machine. **Configure** shows that machine's own `.env` values (read over SSH at its last check) read only, and **.env** in the header says so before opening this PC's `.env`. Add new values with **Missing .env values**, or change them on the machine.
 
 ### Source pages
 

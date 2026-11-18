@@ -6,6 +6,33 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.14] - 2026-11-18
+
+### Changed
+- **Master folders.** A compose folder that keeps `Env_` templates and no `.env` (the folder you copy to each machine, where
+  one `Env_` file is renamed to `.env`) is now treated as a master folder that never needs a `.env` of its own:
+  - no more "This folder has no .env file yet" banner or **Create .env** button,
+  - **Check** no longer says "There's no .env next to the compose file" (see below),
+  - the **.env** header button no longer offers to make an empty `.env` there; it offers to open the folder instead,
+  - **Configure** never makes a `.env` there: `.env` values are read only unless the picked machine gets an `Env_` file
+    (they're saved in that file as before), and **Add variable** and **Move to .env** explain why instead.
+- On **This PC** a master folder's variables are read from `Env_Windows` (or the first `Env_` file) with `--env-file`,
+  so the compose file loads without a `.env`. Before, every variable was blank and Docker couldn't read the file.
+- **Variables from**, a new box next to the compose file, shows where the variables come from (for example
+  *Env_Windows (master folder)*, *.env* or *.env on NAS*), clicking it opens that file
+  like **.env** does, the **.env** button's tooltip names it, and the Activity log notes it when it changes.
+- A compose error no longer starts with a "variable is not set" warning for every variable, so the real error shows.
+- **Check** in a master folder tests the variables against each `Env_` template instead of skipping them: it warns
+  when a template doesn't set one (for example `MP3_ARTIST_PICS` missing from `Env_Synology`) or when no template does.
+- **Machines that keep their own .env** (*.env comes from: (leave .env as it is)*): Configure used to show and save
+  this PC's `.env` values, which **Send** never copies there. It now shows that machine's own `.env` values (read over SSH
+  at its last check) read only, and says how to change them. **.env** in the header warns before opening this PC's `.env`.
+- The v1.13 **Missing .env values** check on other machines, and folders that do have a `.env`, work as before.
+- Help (Other machines and Send, Configure), README and About > What's new describe both.
+
+### Removed
+- The **Create .env** banner and its `Env_` picker, which copied a template to `.env` next to the compose file.
+
 ## [1.13] - 2026-11-17
 
 ### Added
