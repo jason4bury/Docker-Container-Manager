@@ -33,7 +33,7 @@
     Opens that compose file.
 
 .NOTES
-    Version:   1.14 (keep in step with CHANGELOG.md)
+    Version:   1.15 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -48,7 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.14'
+$script:AppVersion = '1.15'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 $script:AppId      = 'jason4bury.Docker-Container-Manager'   # taskbar ID, the same as the shortcut's
 
@@ -440,6 +440,7 @@ $script:ComposePath    = ''
 $script:ComposeDir     = ''
 $script:ProjectName    = ''
 $script:ConfigError    = ''
+$script:ConfigTimedOut = $false
 $script:ConfigLoaded   = $false
 $script:ConfigLoading  = $false
 $script:ConfigWanted   = $false
@@ -648,9 +649,19 @@ function Start-DockerCall {
         $runner = New-DockerRunner $full $true -Local:$Local
         [void]$script:Calls.Add(@{ Runner = $runner; OnDone = $OnDone; Started = [DateTime]::Now; Tag = $Tag })
     } catch {
-        $fail = [pscustomobject]@{ ExitCode = -1; Output = ''; Error = $_.Exception.Message }
+        $fail = [pscustomobject]@{ ExitCode = -1; Output = ''; Error = $_.Exception.Message; TimedOut = $false }
         & $OnDone $fail $Tag
     }
+}
+
+# What to say when a docker call gets no answer: where to look, not the docker command.
+function Get-TimeoutMessage {
+    $m = Get-Machine
+    if ($m) {
+        $tip = if ((([string]$m.Login -split '@')[-1]) -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { ' An IP address (such as 192.168.0.113) is often more reliable than a name.' } else { '' }
+        return "Can't reach $($m.Name): it didn't answer within 2 minutes. Check it's switched on and connected to the network, and that its SSH login is right in Machines.$tip"
+    }
+    return "Docker didn't answer within 2 minutes. Check Docker Desktop is running, then press Try again."
 }
 
 function Update-Calls {
@@ -662,9 +673,11 @@ function Update-Calls {
         $script:Calls.Remove($call)
         if ($timedOut -and -not $r.IsDone) {
             $r.Kill()
-            $res = [pscustomobject]@{ ExitCode = -1; Output = ''; Error = "Timed out: $($r.CommandLine)" }
+            # The raw command only goes to the Activity log; banners and the status line get plain English.
+            Write-Activity "Timed out after 2 minutes on $(Get-MachineName): $($r.CommandLine)"
+            $res = [pscustomobject]@{ ExitCode = -1; Output = ''; Error = (Get-TimeoutMessage); TimedOut = $true }
         } else {
-            $res = [pscustomobject]@{ ExitCode = $r.ExitCode; Output = $r.Output; Error = $r.Error }
+            $res = [pscustomobject]@{ ExitCode = $r.ExitCode; Output = $r.Output; Error = $r.Error; TimedOut = $false }
         }
         # Tag is whatever the caller passed in (for example the row a lookup is for).
         try { & $call.OnDone $res $call.Tag } catch { Write-Activity "Internal error: $($_.Exception.Message)" }
@@ -1738,7 +1751,13 @@ function Update-Banner {
             return
         }
         if ($script:DockerState -eq 'down') {
-            Show-Banner -Kind warn -Text "$($m.Name) can't be reached over SSH, or Docker isn't running there, so the status below may be out of date. $script:RemoteError" `
+            $why = if ($script:RemoteError -like "Can't reach *") { "$script:RemoteError The status below may be out of date." } else { "$($m.Name) can't be reached over SSH, or Docker isn't running there, so the status below may be out of date. $script:RemoteError" }
+            Show-Banner -Kind warn -Text $why `
+                -Action @{ Text = 'Machines...'; Glyph = [string][char]0xE713; Click = { Show-Machines } }
+            return
+        }
+        if ($script:ConfigError -and $script:ConfigTimedOut) {
+            Show-Banner -Kind warn -Text ($script:ConfigError + ' The list shows the last version that worked.') `
                 -Action @{ Text = 'Machines...'; Glyph = [string][char]0xE713; Click = { Show-Machines } }
             return
         }
@@ -2448,6 +2467,7 @@ function Set-ComposeFile([string]$Path) {
     $script:ProjectName = ''
     $script:ConfigLoaded = $false
     $script:ConfigError = ''
+    $script:ConfigTimedOut = $false
     $script:EnvCheckWanted = $true
     $script:EnvMissing = $null
     $script:Rows.Clear()
@@ -2530,6 +2550,15 @@ function Start-ConfigLoad {
             $script:OldCompose = $true
             $script:ConfigLoading = $false
             Request-ConfigLoad
+            return
+        }
+        if ($res.ExitCode -ne 0 -and $res.TimedOut) {
+            $script:ConfigLoading = $false
+            $script:ConfigError = $res.Error
+            $script:ConfigTimedOut = $true
+            Update-Banner
+            Update-View
+            Set-Status $(if (Get-Machine) { "$(Get-MachineName) can't be reached." } else { "Docker didn't answer." })
             return
         }
         if ($res.ExitCode -ne 0) {
@@ -2641,6 +2670,7 @@ function Import-ComposeConfig($Config, [hashtable]$Hashes) {
         $script:Rows.Clear(); $script:RowIndex = @{}
     }
     $script:ConfigError = ''
+    $script:ConfigTimedOut = $false
     $services = Get-PropValue $Config 'services'
     $script:ServiceConfigs = @{}
     $seen = @{}
@@ -2737,7 +2767,7 @@ function Start-Poll {
         # The machine was switched while docker ps was running: ignore this answer.
         if ($script:PollMachine -ne [string]$script:Settings.Machine) { $script:NextPoll = [DateTime]::MinValue; return }
         if ($res.ExitCode -ne 0) {
-            $msg = Get-FirstLines $res.Error 2
+            $msg = if ($res.TimedOut) { $res.Error } else { Get-FirstLines $res.Error 2 }
             if ($script:DockerState -ne 'down') { Write-Activity "Docker isn't responding on $(Get-MachineName): $msg" }
             $script:DockerState = 'down'
             $script:RemoteError = $msg
@@ -5710,6 +5740,11 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.15' = @(
+        'SSH key help: the two setup commands (make a key, copy it to the machine) are in boxes you can select, and each has a Copy button.',
+        'When a machine doesn''t answer in time, the banner says so in plain English (check it''s switched on, connected and that its SSH login is right) instead of showing the docker command. The command still goes to the Activity log.',
+        '.env in a master folder opens a Master folder window in the app''s own look: each Env_ template is listed with the machines that use it and an Edit button, plus Open folder.'
+    )
     '1.14' = @(
         'Master folders: a compose folder that keeps Env_ templates and no .env (the one you copy to each machine) no longer gets a "no .env yet" warning, a Create .env button or an offer to make an empty .env, and Configure never makes a .env there. On This PC its variables are read from Env_Windows, so the compose file loads.',
         'Check compose file in a master folder checks the variables against each Env_ template, and warns about one a template doesn''t set.',
@@ -7771,9 +7806,7 @@ $ui.BtnEditEnv.Add_Click({
             if ([Windows.MessageBox]::Show($window, $ask, $script:AppName, 'YesNo', 'Information') -ne 'Yes') { return }
         }
         elseif (-not (Test-Path -LiteralPath $envFile) -and (Test-MasterFolder)) {
-            $names = @(Get-ChildItem -LiteralPath $script:ComposeDir -Filter 'Env_*' -File -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', '
-            $ask = "This is a master folder: it keeps Env_ templates ($names) and no .env, and doesn't need one. Each machine gets its .env from one of them.`n`nOpen the folder to edit a template?"
-            if ([Windows.MessageBox]::Show($window, $ask, $script:AppName, 'YesNo', 'Information') -eq 'Yes') { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$script:ComposeDir`"" }
+            Show-MasterFolder $window
             return
         }
         if (-not (Test-Path -LiteralPath $envFile)) {
@@ -8163,6 +8196,7 @@ function Set-Machine([string]$Name) {
     $script:ProjectName = ''
     $script:ConfigLoaded = $false
     $script:ConfigError = ''
+    $script:ConfigTimedOut = $false
     $script:RemoteError = ''
     $script:OldCompose = $false
     $script:EnvCheckWanted = $true
@@ -8663,6 +8697,155 @@ function Test-MachineValues($m, [object[]]$All) {
     return ''
 }
 
+# ---------------------------------------------------------------------------
+# Master folder: shown by .env when the folder keeps Env_ templates and no .env.
+# Lists each template, which machines use it, and an Edit button for each.
+# ---------------------------------------------------------------------------
+$masterFolderXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Master folder" Width="540" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <StackPanel Margin="18,16,18,16">
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="20" Text="&#xE8B7;" Foreground="{StaticResource Accent}"
+                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+            <StackPanel Grid.Column="1">
+                <TextBlock Text="This is a master folder" FontSize="16" FontWeight="SemiBold"/>
+                <TextBlock x:Name="MfFolder" Foreground="{StaticResource SoftInk}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+            </StackPanel>
+        </Grid>
+        <TextBlock TextWrapping="Wrap" Margin="0,12,0,10"
+                   Text="It keeps Env_ templates and no .env, and doesn't need one. Each machine gets its .env from one of the templates when you press Send. To change a machine's values, edit its template."/>
+        <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Edge}" BorderThickness="1" CornerRadius="8" Padding="12,6">
+            <StackPanel x:Name="MfList"/>
+        </Border>
+        <TextBlock x:Name="MfThisPc" Foreground="{StaticResource SoftInk}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+        <Grid Margin="0,16,0,0">
+            <Button x:Name="MfOpenFolder" Content="Open folder" Tag="&#xE838;" Style="{StaticResource Btn}" HorizontalAlignment="Left"/>
+            <Button x:Name="MfClose" Content="Close" Style="{StaticResource PrimaryBtn}" HorizontalAlignment="Right" MinWidth="80" IsDefault="True" IsCancel="True"/>
+        </Grid>
+    </StackPanel>
+</Window>
+'@
+
+function Show-MasterFolder($Owner) {
+    $w = New-XamlObject $masterFolderXaml
+    $w.Owner = $Owner
+    if ($window.Icon) { $w.Icon = $window.Icon }
+    $m = @{ Window = $w }
+    foreach ($n in 'MfFolder', 'MfList', 'MfThisPc', 'MfOpenFolder', 'MfClose') { $m[$n] = $w.FindName($n) }
+    $m.MfFolder.Text = $script:ComposeDir
+    $m.MfFolder.ToolTip = $script:ComposeDir
+    $templates = @(Get-ChildItem -LiteralPath $script:ComposeDir -Filter 'Env_*' -File -ErrorAction SilentlyContinue | Sort-Object Name)
+    $first = $true
+    foreach ($t in $templates) {
+        $row = New-Object Windows.Controls.Grid
+        $row.Margin = '0,6,0,6'
+        [void]$row.ColumnDefinitions.Add((New-Object Windows.Controls.ColumnDefinition))
+        [void]$row.ColumnDefinitions.Add((New-Object Windows.Controls.ColumnDefinition -Property @{ Width = [Windows.GridLength]::Auto }))
+        $info = New-Object Windows.Controls.StackPanel
+        $info.VerticalAlignment = 'Center'
+        $name = New-Object Windows.Controls.TextBlock -Property @{ Text = $t.Name; FontWeight = 'SemiBold' }
+        $users = @($script:Settings.Machines | Where-Object { $_.EnvFile -eq $t.Name } | ForEach-Object Name)
+        $usedBy = if ($users.Count) { "Used by $($users -join ', ')" } else { 'No machine uses it yet' }
+        $sub = New-Object Windows.Controls.TextBlock -Property @{ Text = $usedBy; TextWrapping = 'Wrap'; FontSize = 12 }
+        $sub.Foreground = $w.FindResource('SoftInk')
+        [void]$info.Children.Add($name)
+        [void]$info.Children.Add($sub)
+        $edit = New-Object Windows.Controls.Button -Property @{ Content = 'Edit'; Tag = [string][char]0xE70F; VerticalAlignment = 'Center'; Margin = '10,0,0,0' }
+        $edit.Style = $w.FindResource('Btn')
+        $edit.ToolTip = $t.FullName
+        $edit.Add_Click({ param($src) Open-InEditor ([string]$src.ToolTip) })
+        [Windows.Controls.Grid]::SetColumn($edit, 1)
+        [void]$row.Children.Add($info)
+        [void]$row.Children.Add($edit)
+        if (-not $first) {
+            $line = New-Object Windows.Controls.Border -Property @{ Height = 1; Margin = '0,0,0,0' }
+            $line.Background = $w.FindResource('Edge')
+            [void]$m.MfList.Children.Add($line)
+        }
+        [void]$m.MfList.Children.Add($row)
+        $first = $false
+    }
+    $pc = Get-MasterEnvFile
+    $m.MfThisPc.Text = if ($pc) { "On This PC, the app reads variables from $([IO.Path]::GetFileName($pc))." } else { '' }
+    $m.MfOpenFolder.Add_Click({ Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$script:ComposeDir`"" })
+    $m.MfClose.Add_Click({ if ($script:MasterFolderBox) { $script:MasterFolderBox.Window.Close() } })
+    $script:MasterFolderBox = $m
+    [void]$w.ShowDialog()
+    $script:MasterFolderBox = $null
+}
+
+# ---------------------------------------------------------------------------
+# SSH key help: the one-time key setup. The two commands are in read-only boxes, so they can be
+# selected, and each has a Copy button.
+# ---------------------------------------------------------------------------
+$keyHelpXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SSH key help" Width="620" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        FontFamily="Segoe UI" FontSize="13" Background="{DynamicResource Page}" Foreground="{DynamicResource Ink}">
+    <Window.Resources><!--SHARED--></Window.Resources>
+    <StackPanel Margin="18,16,18,16">
+        <TextBlock Text="The app signs in with an SSH key, so it never asks for a password. Set one up once:" TextWrapping="Wrap"/>
+        <TextBlock Text="1. In PowerShell on this PC, make a key (press Enter at each question):" TextWrapping="Wrap" Margin="0,12,0,4"/>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBox x:Name="KhCmd1" Style="{StaticResource Field}" IsReadOnly="True" FontFamily="Consolas" TextWrapping="Wrap"/>
+            <Button x:Name="KhCopy1" Grid.Column="1" Content="Copy" Tag="&#xE8C8;" Style="{StaticResource Btn}" Margin="8,0,0,0" VerticalAlignment="Top"/>
+        </Grid>
+        <TextBlock Text="2. Copy it to the machine (type that machine's password once):" TextWrapping="Wrap" Margin="0,12,0,4"/>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBox x:Name="KhCmd2" Style="{StaticResource Field}" IsReadOnly="True" FontFamily="Consolas" TextWrapping="Wrap"/>
+            <Button x:Name="KhCopy2" Grid.Column="1" Content="Copy" Tag="&#xE8C8;" Style="{StaticResource Btn}" Margin="8,0,0,0" VerticalAlignment="Top"/>
+        </Grid>
+        <TextBlock Text="3. Press Test connection." TextWrapping="Wrap" Margin="0,12,0,0"/>
+        <TextBlock TextWrapping="Wrap" Margin="0,12,0,0" Foreground="{StaticResource SoftInk}"
+                   Text="Synology: turn on SSH in Control Panel &gt; Terminal &amp; SNMP, turn on the user home service in Control Panel &gt; User &amp; Group &gt; Advanced, and use an administrator account. If Test says permission denied for docker, run once on the NAS: sudo synogroup --add docker &lt;your user&gt;, then sudo chown root:docker /var/run/docker.sock."/>
+        <Grid Margin="0,16,0,0">
+            <TextBlock x:Name="KhNote" Foreground="{StaticResource Ok}" VerticalAlignment="Center"/>
+            <Button x:Name="KhOk" Content="OK" Style="{StaticResource PrimaryBtn}" HorizontalAlignment="Right" MinWidth="80" IsDefault="True" IsCancel="True"/>
+        </Grid>
+    </StackPanel>
+</Window>
+'@
+
+function Show-KeyHelp($Owner, [string]$Login, [string]$Port) {
+    $w = New-XamlObject $keyHelpXaml
+    $w.Owner = $Owner
+    if ($window.Icon) { $w.Icon = $window.Icon }
+    $k = @{ Window = $w }
+    foreach ($n in 'KhCmd1', 'KhCmd2', 'KhCopy1', 'KhCopy2', 'KhNote', 'KhOk') { $k[$n] = $w.FindName($n) }
+    $k.KhCmd1.Text = 'ssh-keygen -t ed25519'
+    $k.KhCmd2.Text = "type `$env:USERPROFILE\.ssh\id_ed25519.pub | ssh$Port $Login `"mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys`""
+    $k.KhCopy1.Add_Click({ Copy-KeyHelpCommand 1 })
+    $k.KhCopy2.Add_Click({ Copy-KeyHelpCommand 2 })
+    $k.KhOk.Add_Click({ if ($script:KeyHelp) { $script:KeyHelp.Window.Close() } })
+    $script:KeyHelp = $k
+    [void]$w.ShowDialog()
+    $script:KeyHelp = $null
+}
+
+function Copy-KeyHelpCommand([int]$Step) {
+    $k = $script:KeyHelp
+    if (-not $k) { return }
+    $box = $k["KhCmd$Step"]
+    try {
+        [Windows.Clipboard]::SetText($box.Text)
+        $k.KhNote.Foreground = $k.Window.FindResource('Ok')
+        $k.KhNote.Text = "Step $Step command copied."
+    } catch {
+        $k.KhNote.Foreground = $k.Window.FindResource('Bad')
+        $k.KhNote.Text = 'The clipboard is busy. Select the text and press Ctrl+C instead.'
+    }
+    $box.Focus() | Out-Null
+    $box.SelectAll()
+}
+
 function Show-Machines {
     $w = New-XamlObject $machinesXaml
     $w.Owner = $window
@@ -8708,14 +8891,7 @@ function Show-Machines {
             $m = Get-MachineFormValues
             $login = if ($m.Login) { $m.Login } else { 'user@address' }
             $port = if ($m.Port) { " -p $($m.Port)" } else { '' }
-            $text = "The app signs in with an SSH key, so it never asks for a password. Set one up once:`n`n" +
-            "1. In PowerShell on this PC, make a key (press Enter at each question):`n     ssh-keygen -t ed25519`n`n" +
-            "2. Copy it to the machine (type that machine's password once):`n     type `$env:USERPROFILE\.ssh\id_ed25519.pub | ssh$port $login `"mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys`"`n`n" +
-            "3. Press Test connection.`n`n" +
-            "Synology: turn on SSH in Control Panel > Terminal & SNMP, turn on the user home service in Control Panel > User & Group > Advanced, and use an administrator account. If Test says permission denied for docker, run once on the NAS: sudo synogroup --add docker <your user>, then sudo chown root:docker /var/run/docker.sock.`n`n" +
-            "This text has been copied to the clipboard."
-            try { [Windows.Clipboard]::SetText($text) } catch { Write-Verbose 'Clipboard busy.' }
-            [void][Windows.MessageBox]::Show($f.Window, $text, 'SSH key help', 'OK', 'Information')
+            Show-KeyHelp $f.Window $login $port
         })
     $f.BtnTestMachine.Add_Click({
             $f = $script:MachinesForm
@@ -8732,6 +8908,7 @@ function Show-Machines {
             try { $f.TestRunner = New-Object Dcm.Runner($ssh, [string[]](@(Get-SshArguments $m) + @($cmd)), $env:USERPROFILE, $true) }
             catch { $f.TxtMTest.Text = "Couldn't start ssh: $($_.Exception.Message)"; return }
             $f.TestStarted = [DateTime]::Now
+            $f.TestLogin = [string]$m.Login
             if (-not $f.TestTimer) {
                 $f.TestTimer = New-Object Windows.Threading.DispatcherTimer
                 $f.TestTimer.Interval = [TimeSpan]::FromMilliseconds(250)
@@ -8740,7 +8917,7 @@ function Show-Machines {
                         if (-not $f -or -not $f.TestRunner) { $this.Stop(); return }
                         $r = $f.TestRunner
                         if (-not $r.IsDone) {
-                            if (([DateTime]::Now - $f.TestStarted).TotalSeconds -gt 30) { $r.Kill(); $f.TestRunner = $null; $f.TxtMTest.Text = 'No answer after 30 seconds.' }
+                            if (([DateTime]::Now - $f.TestStarted).TotalSeconds -gt 30) { $r.Kill(); $f.TestRunner = $null; $f.TxtMTest.Text = "No answer after 30 seconds. Check the machine is switched on and connected to the network, and that the SSH login and port are right$(if ((([string]$f.TestLogin) -split '@')[-1] -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { ' (an IP address is often more reliable than a name)' })." }
                             return
                         }
                         $f.TestRunner = $null

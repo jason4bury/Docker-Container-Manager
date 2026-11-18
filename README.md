@@ -6,7 +6,7 @@
 
 Run and organise the containers in your Docker Compose file, in groups, from one Windows window.
 
-![Version](https://img.shields.io/badge/version-v1.14-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
+![Version](https://img.shields.io/badge/version-v1.15-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Docker-Container-Manager)
 
 ## ✨ Features
 
@@ -57,7 +57,7 @@ The screenshot uses the demo project in [`docs/demo/`](docs/demo/docker-compose.
 
 ## 📦 Installation
 
-1. Download `Docker-Container-Manager-v1.14.zip` from the [latest release](../../releases/latest) and unzip it wherever you like to keep it.
+1. Download `Docker-Container-Manager-v1.15.zip` from the [latest release](../../releases/latest) and unzip it wherever you like to keep it.
 2. Double-click **Docker Container Manager.cmd** in the unzipped folder. It makes a **Docker Container Manager** shortcut there and in the Start menu, and starts the app. From then on, use the shortcut, the Start menu or a pinned taskbar button.
 
 Nothing is installed and no Windows settings are changed. The shortcut runs the script with PowerShell's execution policy bypassed for that run only. If the app doesn't open, run `"Docker Container Manager.cmd" debug` from a command prompt to start it in that window and see any errors.
@@ -187,7 +187,7 @@ The list at the top left switches between **This PC** and other machines that ru
 
 The two lists at the top are captioned **Containers on** (which machine's Docker the app shows and controls) and **Compose file**. Each machine remembers the compose file on this PC you last used with it. With another machine picked, the compose file box reads **Send from:**, because that machine runs its own copy of the file (in its compose folder); the file on this PC is what **Send** copies there and what **Configure** edits. The usual routine for a NAS: pick it in **Containers on**, edit the master copy (**Edit** or **Configure**), press **Send**, then **Apply changes**.
 
-The app uses Windows' own `ssh.exe` with an SSH key, so it never asks for or stores a password. **SSH key help** in the Machines window shows the one-time setup, and **Test connection** checks it.
+The app uses Windows' own `ssh.exe` with an SSH key, so it never asks for or stores a password. **SSH key help** in the Machines window shows the one-time setup, with a **Copy** button for each command, and **Test connection** checks it. If a machine doesn't answer, the banner says what to check, and the command that timed out goes to the Activity log.
 
 With a machine picked, every docker command (status, start, stop, update, logs, shell, disk usage) runs on that machine, against the compose file in its folder. The compose file on this PC stays the master:
 
@@ -210,7 +210,7 @@ If any are missing, a **Missing .env values** window lists them, with the line e
 A folder that keeps `Env_` templates (`Env_Windows`, `Env_Synology` and so on) and no `.env` is a **master folder**: the one you copy to each machine, where one `Env_` file is renamed to that machine's `.env`. It never needs a `.env` of its own, so the app doesn't warn that one is missing, offer to make one or make one:
 
 - **Check** tests the variables against each `Env_` template instead, and warns about one that a template doesn't set (for example `MP3_ARTIST_PICS` missing from `Env_Synology`) or that no template sets.
-- **.env** in the header offers to open the folder, so you can edit a template.
+- **.env** in the header opens the **Master folder** window: each `Env_` template is listed with the machines that use it and an **Edit** button that opens it in your editor, and **Open folder** opens the folder in Explorer.
 - **Configure** shows `.env` values but only changes them for a machine that gets an `Env_` file (they're saved in that file). On **This PC**, or for a machine that keeps its own `.env`, they're read only. Values written in the compose file can still be changed.
 - **Variables from**, next to the compose file box, shows where the variables come from (click it to open that file; for example **Env_Windows (master folder)**, **.env**, **Env_Synology (sent as .env)** or **.env on NAS**).
 - On **This PC** the variables are read from `Env_Windows` (or the first `Env_` file if there's no `Env_Windows`), passed to Docker with `--env-file`, so the compose file loads without a `.env` being made.

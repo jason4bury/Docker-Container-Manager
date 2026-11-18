@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.15] - 2026-11-18
+
+### Changed
+- **SSH key help** is now the app's own window instead of a Windows message box. The two setup commands (step 1, make
+  a key, and step 2, copy it to the machine) are in read-only boxes, so you can select any part of them, and each has a
+  **Copy** button. The rest of the help is unchanged. It no longer copies the whole help text to the clipboard when it opens.
+- **Time-outs say what to check.** When a machine (or Docker on this PC) doesn't answer within 2 minutes, the banner and
+  status line now say *Can't reach Ubuntu-Server: it didn't answer within 2 minutes. Check it's switched on and connected
+  to the network, and that its SSH login is right in Machines*, with a tip to use an IP address when the login uses a
+  name. Before, they showed the raw `docker ps ...` or `docker compose ... config` command. The command still goes to the
+  Activity log.
+- A time-out while reading a machine's compose file is shown as a connection problem with a **Machines...** button,
+  instead of "couldn't read its compose file" with **Send to machine...**, which didn't help.
+- **Test connection** explains what to check when there's no answer after 30 seconds.
+- **Master folder window.** Pressing **.env** in a master folder opens a window in the app's own look instead of a
+  Windows Yes/No message box. It lists each `Env_` template with the machines that use it and an **Edit** button that
+  opens that template in your editor, says which template This PC reads, and has **Open folder** for Explorer.
+- About > What's new describes these changes.
+
 ## [1.14] - 2026-11-18
 
 ### Changed
