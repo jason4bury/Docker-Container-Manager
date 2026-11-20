@@ -109,6 +109,12 @@ try {
     # --- 4. Release folder ---
     if (-not (Test-Path -LiteralPath $buildsDir)) { New-Item -ItemType Directory -Path $buildsDir -Force | Out-Null }
     $outDir = Join-Path $buildsDir $releaseName
+    # Stop before deleting anything if this version is open: removing a running tool's folder
+    # fails part-way and leaves it half empty.
+    if (Test-Path -LiteralPath $outDir) {
+        $open = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($outDir, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+        if ($open.Count) { throw "$releaseName is open (process $($open[0].ProcessId)). Close it, then run Build.cmd again." }
+    }
     if (Test-Path -LiteralPath $outDir) { Remove-Item -LiteralPath $outDir -Recurse -Force }   # this version's own earlier build
     New-Item -ItemType Directory -Path $outDir -Force | Out-Null
     foreach ($p in $cfg.Release.Files.PSObject.Properties) {
