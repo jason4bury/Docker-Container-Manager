@@ -142,6 +142,24 @@ try {
         # The shortcut maker unblocks the folder; nothing else changes in it.
     }
 
+    # --- 6b. Start menu and desktop shortcuts ---
+    # Shortcuts made by double-clicking the release's .cmd point at that version's folder. Once an
+    # old version is recycled they'd open nothing and show a blank icon (the taskbar takes its icon
+    # from the Start menu shortcut), so any that exist are pointed at this version too.
+    $built = Join-Path $buildsDir "$appName.lnk"
+    if (Test-Path -LiteralPath $built) {
+        $wsh = New-Object -ComObject WScript.Shell
+        $src = $wsh.CreateShortcut($built)
+        foreach ($dir in @((Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'), [Environment]::GetFolderPath('Desktop'))) {
+            $other = Join-Path $dir "$appName.lnk"
+            if (-not (Test-Path -LiteralPath $other)) { continue }
+            $l = $wsh.CreateShortcut($other)
+            $l.TargetPath = $src.TargetPath; $l.Arguments = $src.Arguments; $l.IconLocation = $src.IconLocation; $l.WorkingDirectory = $src.WorkingDirectory
+            $l.Save()
+            Write-Host "Shortcut updated: $other" -ForegroundColor Green
+        }
+    }
+
     # --- 7. ESET scan (if installed) ---
     $ecls = Join-Path $env:ProgramFiles 'ESET\ESET Security\ecls.exe'
     if (Test-Path -LiteralPath $ecls) {
