@@ -33,7 +33,7 @@
     Opens that compose file.
 
 .NOTES
-    Version:   1.17 (keep in step with CHANGELOG.md)
+    Version:   1.18 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -48,7 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.17'
+$script:AppVersion = '1.18'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 $script:AppId      = 'jason4bury.Docker-Container-Manager'   # taskbar ID, the same as the shortcut's
 
@@ -658,7 +658,7 @@ function Start-DockerCall {
 function Get-TimeoutMessage {
     $m = Get-Machine
     if ($m) {
-        $tip = if ((([string]$m.Login -split '@')[-1]) -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { ' An IP address (such as 192.168.0.113) is often more reliable than a name.' } else { '' }
+        $tip = if ((([string]$m.Login -split '@')[-1]) -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { ' An IP address (such as 192.168.1.10) is often more reliable than a name.' } else { '' }
         return "Can't reach $($m.Name): it didn't answer within 2 minutes. Check it's switched on and connected to the network, and that its SSH login is right in Machines.$tip"
     }
     return "Docker didn't answer within 2 minutes. Check Docker Desktop is running, then press Try again."
@@ -5830,6 +5830,9 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.18' = @(
+        'The example address in the SSH tip (an IP address is often more reliable than a name) is now a made-up one.'
+    )
     '1.17' = @(
         'Help describes the v1.15 and v1.16 changes: Copy buttons in SSH key help, the "can''t reach" message when a machine doesn''t answer, the Master folder window, and why the open compose file can''t be removed from the list.'
     )

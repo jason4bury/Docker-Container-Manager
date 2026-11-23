@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.18] - 2026-11-23
+
+### Changed
+- The example address in the tip about using an IP address for a machine is now a made-up one (192.168.1.10).
+
 ## [1.17] - 2026-11-18
 
 ### Changed
