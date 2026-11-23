@@ -33,7 +33,7 @@
     Opens that compose file.
 
 .NOTES
-    Version:   1.18 (keep in step with CHANGELOG.md)
+    Version:   1.19 (keep in step with CHANGELOG.md)
     Author:    Jason Rhodes
     Licence:   MIT - see LICENSE
     Settings:  %APPDATA%\Docker Container Manager\settings.json
@@ -48,7 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:AppName    = 'Docker Container Manager'
-$script:AppVersion = '1.18'
+$script:AppVersion = '1.19'
 $script:RepoUrl    = 'https://github.com/jason4bury/Docker-Container-Manager'
 $script:AppId      = 'jason4bury.Docker-Container-Manager'   # taskbar ID, the same as the shortcut's
 
@@ -5830,6 +5830,9 @@ function Show-Settings {
 # About window
 # ---------------------------------------------------------------------------
 $script:WhatsNew = [ordered]@{
+    '1.19' = @(
+        'When a group label is added to a service that has no labels yet, labels: now goes straight after container_name: (or at the end of the service when it has none), instead of at the end.'
+    )
     '1.18' = @(
         'The example address in the SSH tip (an IP address is often more reliable than a name) is now a made-up one.'
     )
@@ -6442,8 +6445,14 @@ function Add-ServiceLabel($Lines, [string]$Service, [string]$Label, [string]$Val
         $indent = if ($info.ItemIndent -ge 0) { $info.ItemIndent } else { $info.KeyIndent + $step }
         $Lines.Insert($info.Last + 1, (Format-LabelLine $indent $form $Label $Value))
     } else {
-        $Lines.Insert($info.End + 1, ((' ' * $info.KeyIndent) + 'labels:'))
-        $Lines.Insert($info.End + 2, (Format-LabelLine ($info.KeyIndent + $step) $form $Label $Value))
+        # A new labels: goes straight after container_name: (or at the end of the service when it has none).
+        $at = $info.End
+        for ($i = $info.Start + 1; $i -le $info.End; $i++) {
+            $l = $Lines[$i]
+            if ((Test-ContentLine $l) -and (Get-LineIndent $l) -eq $info.KeyIndent -and $l.Trim() -match '^container_name\s*:') { $at = $i; break }
+        }
+        $Lines.Insert($at + 1, ((' ' * $info.KeyIndent) + 'labels:'))
+        $Lines.Insert($at + 2, (Format-LabelLine ($info.KeyIndent + $step) $form $Label $Value))
     }
     return ''
 }
@@ -7640,7 +7649,7 @@ $script:HelpTopics = [ordered]@{
     'Group automatically' = @(
         'When some containers have no group, the bar above the list shows Group automatically. It suggests a group for each one from its image name, reusing the groups already in your file.',
         '- Change any group, type a new one, or clear it to leave that container ungrouped.',
-        '- Save groups adds one label line to each of them (after a backup) and changes nothing else. A Saving groups box shows each step; if one fails, the file is left as it was.',
+        '- Save groups adds one label line to each of them (after a backup) and changes nothing else. A service with no labels yet gets labels: straight after its container_name:. A Saving groups box shows each step; if one fails, the file is left as it was.',
         '- My groups (in Group automatically and Settings) is your own list of which group each container goes in, kept on this PC as my-groups.txt. Group automatically uses it first and only guesses the rest; the From column says which. Update from current compose file fills it from the labels you already have.',
         '- The list is ready from the start: the app makes it from the built-in list (or, without one, from the first compose file it loads). Reset to built-in list in the My groups window goes back to it, after asking and a backup. Also add the new groups to My groups (in Group automatically) adds what you save.',
         '- The containers then show Changed until you press Apply changes. On another machine, press Send first.'

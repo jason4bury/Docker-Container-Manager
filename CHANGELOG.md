@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.19] - 2026-11-23
+
+### Changed
+- When a group label is added to a service with no labels yet, `labels:` now goes straight after
+  `container_name:` (or at the end of the service when it has none) instead of at the end of the service.
+
 ## [1.18] - 2026-11-23
 
 ### Changed
